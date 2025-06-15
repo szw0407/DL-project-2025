@@ -1,2 +1,0 @@
-# Tolyu
-DeepLearning Experiment
