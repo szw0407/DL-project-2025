@@ -122,8 +122,12 @@ def train_model(
     optimizer = optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
       # 定义早停相关变量
     best_val_mrr = -1
+    best_val_acc1 = -1
+    best_val_acc5 = -1
+    best_val_acc10 = -1
     patience_counter = 0
     best_model_state = None
+    best_epoch = 0
     
     # 用于记录训练过程的指标
     train_losses = []
@@ -272,18 +276,30 @@ def train_model(
         val_acc1s.append(val_acc_k[1])
         val_acc5s.append(val_acc_k[5])
         val_acc10s.append(val_acc_k[10])
-        best_val_acc1 = max(val_acc1s) if val_acc1s else 0.0
-        best_val_acc5 = max(val_acc5s) if val_acc5s else 0.0
-        best_val_acc10 = max(val_acc10s) if val_acc10s else 0.0
+        print(f"\nEpoch {epoch + 1}/{epochs} - "
+              f"训练损失: {avg_train_loss:.4f}, " +
+                f"验证 MRR: {val_mrr:.4f}, " +
+                f"验证 Acc@1: {val_acc_k[1]:.4f}, " +
+                f"验证 Acc@5: {val_acc_k[5]:.4f}, " +
+                f"验证 Acc@10: {val_acc_k[10]:.4f}")
         
-        print(f"Epoch {epoch+1}/{epochs} - 训练损失: {avg_train_loss:.4f}, 验证 MRR: {val_mrr:.4f}, 验证 Top-1: {val_acc_k[1]:.4f} Top-5: {val_acc_k[5]:.4f}, Top-10: {val_acc_k[10]:.4f}")
-        
-        # 早停检查
-        if val_mrr > best_val_mrr or val_acc_k[1] > best_val_acc1 or val_acc_k[5] > best_val_acc5 or val_acc_k[10] > best_val_acc10:
+        # 综合判断所有指标是否都没有变差
+        improved = False
+        if (val_mrr > best_val_mrr and val_acc_k[1] >= best_val_acc1 and val_acc_k[5] >= best_val_acc5 and val_acc_k[10] >= best_val_acc10) or \
+           (val_acc_k[1] > best_val_acc1 and val_mrr >= best_val_mrr and val_acc_k[5] >= best_val_acc5 and val_acc_k[10] >= best_val_acc10) or \
+           (val_acc_k[5] > best_val_acc5 and val_mrr >= best_val_mrr and val_acc_k[1] >= best_val_acc1 and val_acc_k[10] >= best_val_acc10) or \
+           (val_acc_k[10] > best_val_acc10 and val_mrr >= best_val_mrr and val_acc_k[1] >= best_val_acc1 and val_acc_k[5] >= best_val_acc5):
+            improved = True
+
+        if improved:
+            # 修复类型问题，直接赋值而不是max（因为improved时必然是更优）
             best_val_mrr = val_mrr
+            best_val_acc1 = val_acc_k[1]
+            best_val_acc5 = val_acc_k[5]
+            best_val_acc10 = val_acc_k[10]
             patience_counter = 0
             best_model_state = model.state_dict().copy()
-            
+            best_epoch = epoch
             # 如果指定了保存路径，保存模型
             if model_save_path:
                 while True:
@@ -332,6 +348,8 @@ def train_model(
         plt.ylabel('Loss')
         plt.grid(True)
         plt.legend()
+        plt.axvline(best_epoch, color='r', linestyle='--', label='Early Stop')
+        plt.legend()
         
         plt.subplot(2, 1, 2)
         plt.plot(val_mrrs, label='MRR', marker='o')
@@ -342,6 +360,7 @@ def train_model(
         plt.xlabel('Epoch')
         plt.ylabel('Score')
         plt.grid(True)
+        plt.axvline(best_epoch, color='r', linestyle='--', label='Early Stop')
         plt.legend()
         
         plt.tight_layout()
