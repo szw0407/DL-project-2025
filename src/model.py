@@ -41,54 +41,81 @@ class StorePredictionModel(nn.Module):
                 print(f"警告: 无法加载BERT模型 {bert_model_name}，将禁用BERT特征")
                 self.use_bert = False
         
-        # BERT特征对齐层：将BERT输出特征对齐到序列长度
+        # BERT特征处理：直接通过MLP处理BERT输出
         if self.use_bert:
-            self.bert_feature_projection = nn.Linear(self.bert_feature_dim, embed_dim)
+            # BERT与MLP连接层，增加BatchNorm
+            self.bert_mlp = nn.Sequential(
+                nn.Linear(self.bert_feature_dim, self.bert_feature_dim // 2),
+                nn.BatchNorm1d(self.bert_feature_dim // 2),
+                nn.Tanh(),
+                nn.Dropout(dropout),
+                nn.Linear(self.bert_feature_dim // 2, self.bert_feature_dim // 4),
+                nn.BatchNorm1d(self.bert_feature_dim // 4),
+                nn.SELU(),
+                nn.Dropout(dropout),
+                nn.Linear(self.bert_feature_dim // 4, embed_dim),
+                nn.BatchNorm1d(embed_dim)
+            )
             self.bert_dropout = nn.Dropout(dropout)
 
         # 网格ID嵌入层：将每个grid索引映射为embed_dim维向量
-        self.id_embedding = nn.Embedding(num_classes, embed_dim)
-
-        # 坐标嵌入：将2维坐标映射为coord_dim维向量
+        self.id_embedding = nn.Embedding(num_classes, embed_dim)        # 坐标嵌入：将2维坐标映射为coord_dim维向量
         # 只有当coord_dim > 0 时才创建此层
         if self.coord_dim > 0:
             self.coord_embedding_layer = nn.Linear(2, coord_dim)
+            self.coord_bn = nn.BatchNorm1d(coord_dim)
         else:
             self.coord_embedding_layer = None
-
+            self.coord_bn = None        
         # LSTM层：输入维度为 embed_dim + coord_dim (如果使用坐标嵌入) + embed_dim (如果使用BERT)
         current_input_dim = embed_dim
         if self.coord_embedding_layer is not None:
             current_input_dim += coord_dim
         if self.use_bert:
-            current_input_dim += embed_dim  # BERT特征经过投影后的维度
+            current_input_dim += embed_dim  # BERT特征经过MLP压缩后的维度
 
         self.lstm = nn.LSTM(current_input_dim, lstm_hidden, num_layers=lstm_layers, batch_first=True,
                             dropout=dropout if lstm_layers > 1 else 0)
         # 注意: LSTM自带的dropout只在多层时作用于层间，单层时不起作用。
         
+        # LSTM后的批归一化
+        self.lstm_bn = nn.BatchNorm1d(lstm_hidden)
+        
         # Dropout层
-        self.dropout_layer = nn.Dropout(dropout)
-
-        # 复杂的MLP层
+        self.dropout_layer = nn.Dropout(dropout)# 复杂的MLP层，增加更多层和BatchNorm
         self.mlp = nn.Sequential(
             nn.Linear(lstm_hidden, lstm_hidden * 2),
-            nn.ReLU(),
+            nn.BatchNorm1d(lstm_hidden * 2),
+            nn.ReLU6(),
             nn.Dropout(dropout),
+
+            # nn.Linear(lstm_hidden * 2, lstm_hidden * 2),
+            # nn.BatchNorm1d(lstm_hidden * 2),
+            # nn.LeakyReLU(),
+            # nn.Dropout(dropout),
+            
             nn.Linear(lstm_hidden * 2, lstm_hidden),
+            nn.BatchNorm1d(lstm_hidden),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            
+            nn.Linear(lstm_hidden, lstm_hidden // 2),
+            nn.BatchNorm1d(lstm_hidden // 2),
             nn.ReLU(),
             nn.Dropout(dropout),
-            nn.Linear(lstm_hidden, lstm_hidden // 2),
+            
+            nn.Linear(lstm_hidden // 2, lstm_hidden // 4),
+            nn.BatchNorm1d(lstm_hidden // 4),
             nn.ReLU(),
             nn.Dropout(dropout)
         )
 
         # 全连接输出层：映射到num_classes维，用于分类预测
-        self.output_fc = nn.Linear(lstm_hidden // 2, num_classes)
-
+        self.output_fc = nn.Linear(lstm_hidden // 4, num_classes)
+        
     def extract_bert_features(self, brand_names, brand_types, seq_len):
         """
-        从店铺名称和类型中提取BERT特征
+        从店铺名称和类型中提取BERT特征，直接通过MLP处理
         
         参数:
         brand_names (list): 店铺名称列表
@@ -129,13 +156,13 @@ class StorePredictionModel(nn.Module):
             # 使用[CLS] token的表示作为整体文本特征
             bert_features = bert_outputs.last_hidden_state[:, 0, :]  # (batch, bert_feature_dim)
         
-        # 投影到指定维度
-        projected_features = self.bert_feature_projection(bert_features)  # (batch, embed_dim)
-        projected_features = self.bert_dropout(projected_features)
+        # 直接通过MLP处理BERT特征
+        bert_processed = self.bert_mlp(bert_features)  # (batch, embed_dim)
+        bert_processed = self.bert_dropout(bert_processed)
         
         # 扩展到序列长度维度，使每个时间步都有相同的BERT特征
         # (batch, embed_dim) -> (batch, seq_len, embed_dim)
-        bert_seq_features = projected_features.unsqueeze(1).expand(-1, seq_len, -1)
+        bert_seq_features = bert_processed.unsqueeze(1).expand(-1, seq_len, -1)
         
         return bert_seq_features
 
@@ -165,14 +192,15 @@ class StorePredictionModel(nn.Module):
         if self.coord_embedding_layer is not None and seq_coords is not None:
             # 检查坐标维度是否正确
             if seq_coords.shape[-1] != 2:
-                raise ValueError(f"坐标张量 seq_coords 的最后一维期望是2 (x,y)，但得到的是 {seq_coords.shape[-1]}")
-
-            # 将坐标转换为向量表示并应用非线性激活
+                raise ValueError(f"坐标张量 seq_coords 的最后一维期望是2 (x,y)，但得到的是 {seq_coords.shape[-1]}")            # 将坐标转换为向量表示并应用非线性激活
             # (batch, seq_len, 2) -> (batch * seq_len, 2)
             coords_flat = seq_coords.reshape(batch_size * seq_len, 2)
             # (batch * seq_len, 2) -> (batch * seq_len, coord_dim)
             coord_emb_flat = self.coord_embedding_layer(coords_flat)
-            # 应用激活函数，例如 Tanh
+            # 应用批归一化（如果可用）
+            if self.coord_bn is not None:
+                coord_emb_flat = self.coord_bn(coord_emb_flat)
+            # 应用激活函数
             coord_emb_activated = torch.tanh(coord_emb_flat)
             # (batch * seq_len, coord_dim) -> (batch, seq_len, coord_dim)
             coord_emb = coord_emb_activated.view(batch_size, seq_len, self.coord_dim)
@@ -194,14 +222,15 @@ class StorePredictionModel(nn.Module):
         # output: (batch, seq_len, lstm_hidden) - 所有时间步的输出
         # h_n: (num_layers, batch, lstm_hidden) - 最后一个时间步的隐藏状态
         # c_n: (num_layers, batch, lstm_hidden) - 最后一个时间步的细胞状态
-        lstm_output, (h_n, c_n) = self.lstm(lstm_input)
-
-        # 5. 提取序列最后一个时间步的输出作为整体序列表示
+        lstm_output, (h_n, c_n) = self.lstm(lstm_input)        # 5. 提取序列最后一个时间步的输出作为整体序列表示
         # lstm_output 包含了所有时间步的输出，我们取最后一个
         # last_out: (batch, lstm_hidden)
         last_out = lstm_output[:, -1, :]
+        
+        # 6. 应用批归一化
+        last_out = self.lstm_bn(last_out)
 
-        # 6. 应用 dropout
+        # 7. 应用 dropout
         last_out_dropped = self.dropout_layer(last_out)
 
         # 7. 通过复杂的MLP

@@ -4,19 +4,21 @@ import torch.optim as optim
 import numpy as np
 import os
 import time
+import matplotlib.pyplot as plt
+from tqdm import tqdm
 from data_preprocessing import load_data
 from model import StorePredictionModel
 from evaluate import compute_metrics
-
-DEFAULT_EMBED_DIM = 72
+plt.rcParams['font.family'] = 'Noto Sans SC'
+DEFAULT_EMBED_DIM = 48
 DEFAULT_COORD_DIM = 18
-DEFAULT_HIDDEN_DIM = 32
-DEFAULT_LSTM_LAYERS = 24
-DEFAULT_DROPOUT = 0.15
-DEFAULT_LR = 1e-3
+DEFAULT_HIDDEN_DIM = 128
+DEFAULT_LSTM_LAYERS = 64
+DEFAULT_DROPOUT = 0.2
+DEFAULT_LR = 2.5e-4
 DEFAULT_WEIGHT_DECAY = 1e-5
 DEFAULT_EPOCHS = 1000
-DEFAULT_PATIENCE = 8
+DEFAULT_PATIENCE = 20
 
 def train_model(
     train_samples, 
@@ -91,14 +93,19 @@ def train_model(
     # 定义损失函数和优化器
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
-    
-    # 定义早停相关变量
+      # 定义早停相关变量
     best_val_mrr = -1
     patience_counter = 0
     best_model_state = None
     
-    # 训练循环
-    print("\n=== 开始训练 ===")
+    # 用于记录训练过程的指标
+    train_losses = []
+    val_mrrs = []
+    val_acc1s = []
+    val_acc5s = []
+    val_acc10s = []
+    
+    # 训练循环    print("\n=== 开始训练 ===")
     for epoch in range(epochs):
         # 训练模式
         model.train()
@@ -110,7 +117,17 @@ def train_model(
         
         # 批处理训练
         batch_size = 32
-        for i in range(0, len(train_samples), batch_size):
+        
+        # 使用tqdm创建进度条
+        progress_bar = tqdm(
+            range(0, len(train_samples), batch_size), 
+            desc=f"Epoch {epoch+1}/{epochs}", 
+            ncols=100, 
+            ascii=False,
+            leave=True
+        )
+        
+        for i in progress_bar:
             batch = train_samples[i:i + batch_size]
             
             # 处理批次数据
@@ -166,16 +183,19 @@ def train_model(
             
             # 计算损失
             loss = criterion(outputs, targets_tensor)
-            
-            # 反向传播和优化
+              # 反向传播和优化
             loss.backward()
             optimizer.step()
             
-            total_loss += loss.item()
+            current_loss = loss.item()
+            total_loss += current_loss
             batch_count += 1
+            
+            # 更新进度条显示当前批次的损失
+            progress_bar.set_postfix(loss=f"{current_loss:.4f}")
         
         # 计算平均训练损失
-        avg_train_loss = total_loss / batch_count if batch_count > 0 else 0        # 在验证集上评估 - 使用我们自己的实现而不是依赖compute_metrics函数
+        avg_train_loss = total_loss / batch_count if batch_count > 0 else 0# 在验证集上评估 - 使用我们自己的实现而不是依赖compute_metrics函数
         model.eval()
         correct_at_k = {1: 0, 5: 0, 10: 0}
         reciprocal_ranks = []
@@ -218,44 +238,95 @@ def train_model(
                     reciprocal_ranks.append(1.0 / rank)
                 except ValueError:
                     reciprocal_ranks.append(0.0)
-        
-        # 计算最终指标
+          # 计算最终指标
         val_acc_k = {k: correct_at_k[k] / len(val_samples) for k in correct_at_k}
         val_mrr = np.mean(reciprocal_ranks) if reciprocal_ranks else 0.0
+        
+        # 记录指标用于绘图
+        train_losses.append(avg_train_loss)
+        val_mrrs.append(val_mrr)
+        val_acc1s.append(val_acc_k[1])
+        val_acc5s.append(val_acc_k[5])
+        val_acc10s.append(val_acc_k[10])
+        best_val_acc1 = max(val_acc1s) if val_acc1s else 0.0
+        best_val_acc5 = max(val_acc5s) if val_acc5s else 0.0
+        best_val_acc10 = max(val_acc10s) if val_acc10s else 0.0
         
         print(f"Epoch {epoch+1}/{epochs} - 训练损失: {avg_train_loss:.4f}, 验证 MRR: {val_mrr:.4f}, 验证 Top-1: {val_acc_k[1]:.4f} Top-5: {val_acc_k[5]:.4f}, Top-10: {val_acc_k[10]:.4f}")
         
         # 早停检查
-        if val_mrr > best_val_mrr:
+        if val_mrr > best_val_mrr or val_acc_k[1] > best_val_acc1 or val_acc_k[5] > best_val_acc5 or val_acc_k[10] > best_val_acc10:
             best_val_mrr = val_mrr
             patience_counter = 0
             best_model_state = model.state_dict().copy()
             
             # 如果指定了保存路径，保存模型
             if model_save_path:
-                torch.save({
-                    'epoch': epoch,
-                    'model_state_dict': model.state_dict(),
-                    'optimizer_state_dict': optimizer.state_dict(),
-                    'val_mrr': val_mrr,
-                    'embed_dim': embed_dim,
-                    'coord_dim': coord_dim_config,
-                    'hidden_dim': hidden_dim,
-                    'lstm_layers': lstm_layers,
-                    'dropout': dropout,
-                    'num_classes': num_total_classes
-                }, model_save_path)
-                print(f"模型已保存至: {model_save_path}")
+                while True:
+                    try:
+                        torch.save({
+                            'epoch': epoch,
+                            'model_state_dict': model.state_dict(),
+                            'optimizer_state_dict': optimizer.state_dict(),
+                            'val_mrr': val_mrr,
+                            'embed_dim': embed_dim,
+                            'coord_dim': coord_dim_config,
+                            'hidden_dim': hidden_dim,
+                            'lstm_layers': lstm_layers,
+                            'dropout': dropout,
+                            'num_classes': num_total_classes
+                        }, model_save_path)
+                        print(f"模型已保存至: {model_save_path}")
+                        break
+                    except Exception as e:
+                        print(f"保存模型时出错: {e}")
+                        print("请检查文件路径和权限，稍后重试...")
+                        time.sleep(5)
         else:
             patience_counter += 1
             if patience_counter >= patience:
                 print(f"早停触发: {patience}轮未改善")
                 break
-    
-    # 加载最佳模型权重
+      # 加载最佳模型权重
     if best_model_state:
         model.load_state_dict(best_model_state)
         print(f"已加载最佳模型 (验证 MRR: {best_val_mrr:.4f})")
+    
+    # 绘制训练过程中的指标变化
+    if len(train_losses) > 0:
+        print("\n=== 绘制训练指标图表 ===")
+        plt.figure(figsize=(15, 10))
+        
+        # 创建子图
+        plt.subplot(2, 1, 1)
+        plt.plot(train_losses, label='训练损失')
+        plt.title('训练损失随时间变化')
+        plt.xlabel('Epoch')
+        plt.ylabel('Loss')
+        plt.grid(True)
+        plt.legend()
+        
+        plt.subplot(2, 1, 2)
+        plt.plot(val_mrrs, label='MRR', marker='o')
+        plt.plot(val_acc1s, label='Top-1准确率', marker='s')
+        plt.plot(val_acc5s, label='Top-5准确率', marker='^')
+        plt.plot(val_acc10s, label='Top-10准确率', marker='*')
+        plt.title('验证集评估指标')
+        plt.xlabel('Epoch')
+        plt.ylabel('Score')
+        plt.grid(True)
+        plt.legend()
+        
+        plt.tight_layout()
+        
+        # 保存图表
+        if model_save_path:
+            plot_save_path = os.path.splitext(model_save_path)[0] + '_training_plot.svg'
+            plt.savefig(plot_save_path)
+            print(f"训练过程指标图表已保存至: {plot_save_path}")
+        
+        # 显示图表（注意：在无界面的环境中需要注释掉）
+        plt.show()
     
     return model
 
@@ -310,13 +381,14 @@ if __name__ == "__main__":
         device_for_eval = torch.device('cuda' if USE_CUDA_IF_AVAILABLE and torch.cuda.is_available() else 'cpu')
         trained_model.to(device_for_eval)
         
-        # 自己实现测试评估，确保正确处理品牌信息
-        trained_model.eval()
+        # 自己实现测试评估，确保正确处理品牌信息        trained_model.eval()
         correct_at_k = {1: 0, 5: 0, 10: 0}
         reciprocal_ranks = []
         
+        test_progress_bar = tqdm(test_samples, desc="测试集评估", ncols=100)
+        
         with torch.no_grad():
-            for test_sample in test_samples:
+            for test_sample in test_progress_bar:
                 prefix_idx, prefix_coords, true_idx_val, brand_name, brand_type = test_sample
                 
                 # 处理序列数据
@@ -365,7 +437,4 @@ if __name__ == "__main__":
         print("\n无测试数据可供评估。")
     else:
         print("\n模型训练失败，无法在测试集上评估。")
-
-    print("\n--- 脚本执行完毕 ---")
-
 
