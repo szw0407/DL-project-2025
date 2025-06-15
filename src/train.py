@@ -15,10 +15,15 @@ DEFAULT_COORD_DIM = 18
 DEFAULT_HIDDEN_DIM = 128
 DEFAULT_LSTM_LAYERS = 64
 DEFAULT_DROPOUT = 0.2
-DEFAULT_LR = 2.5e-4
+DEFAULT_LR = 1e-3
 DEFAULT_WEIGHT_DECAY = 1e-5
 DEFAULT_EPOCHS = 1000
 DEFAULT_PATIENCE = 20
+DEFAULT_TRANS_DIM = 128
+DEFAULT_N_LAYERS = 3
+DEFAULT_N_HEADS = 4
+DEFAULT_MLP_RATIO = 2.0
+DEFAULT_DROP_PATH = 0.1
 
 def train_model(
     train_samples, 
@@ -27,16 +32,22 @@ def train_model(
     embed_dim=DEFAULT_EMBED_DIM, 
     coord = None,
     coord_dim_config=DEFAULT_COORD_DIM, 
-    hidden_dim=DEFAULT_HIDDEN_DIM, 
-    lstm_layers=DEFAULT_LSTM_LAYERS,
+    trans_dim=DEFAULT_TRANS_DIM,
+    n_layers=DEFAULT_N_LAYERS,
+    n_heads=DEFAULT_N_HEADS,
     dropout=DEFAULT_DROPOUT,
+    mlp_ratio=DEFAULT_MLP_RATIO,
+    drop_path=DEFAULT_DROP_PATH,
     lr=DEFAULT_LR,
     weight_decay=DEFAULT_WEIGHT_DECAY,
     epochs=DEFAULT_EPOCHS,
     patience=DEFAULT_PATIENCE,
     device_name='cuda',
     model_save_path=None,
-    use_bert=True
+    use_bert=True,
+    use_mixup=True,
+    mixup_alpha=0.2,
+    grad_clip=2.0
 ):
     """
     训练门店选址预测模型。
@@ -48,6 +59,11 @@ def train_model(
         coords_info: 坐标信息字典，键为网格ID，值为对应的坐标元组 (x, y)
         embed_dim: 嵌入维度
         coord_dim_config: 坐标嵌入维度，如果为0则不使用坐标
+        trans_dim: Transformer维度
+        n_layers: Transformer层数
+        n_heads: 多头数
+        mlp_ratio: MLP扩展比
+        drop_path: DropPath比例
         hidden_dim: LSTM隐藏层维度
         lstm_layers: LSTM层数
         dropout: Dropout比例
@@ -58,6 +74,9 @@ def train_model(
         device_name: 设备名称，'cuda'或'cpu'
         model_save_path: 模型保存路径
         use_bert: 是否使用BERT特征提取，默认为False
+        use_mixup: 是否使用mixup数据增强，默认为True
+        mixup_alpha: mixup的α超参数
+        grad_clip: 梯度裁剪的阈值，默认为2.0
 
     返回:
         训练好的模型
@@ -65,14 +84,19 @@ def train_model(
     print("\n=== 配置训练参数 ===")
     print(f"嵌入维度: {embed_dim}")
     print(f"坐标嵌入维度: {coord_dim_config}")
-    print(f"LSTM隐藏层维度: {hidden_dim}")
-    print(f"LSTM层数: {lstm_layers}")
+    print(f"Transformer维度: {trans_dim}")
+    print(f"Transformer层数: {n_layers}")
+    print(f"多头数: {n_heads}")
+    print(f"MLP扩展比: {mlp_ratio}")
+    print(f"DropPath比例: {drop_path}")
     print(f"Dropout比例: {dropout}")
     print(f"学习率: {lr}")
     print(f"权重衰减: {weight_decay}")
     print(f"训练轮数: {epochs}")
     print(f"早停耐心值: {patience}")
     print(f"使用BERT: {use_bert}")
+    print(f"Mixup: {use_mixup}")
+    print(f"梯度裁剪: {grad_clip}")
     
     # 确定设备
     device = torch.device(device_name if torch.cuda.is_available() and device_name == 'cuda' else 'cpu')
@@ -83,9 +107,12 @@ def train_model(
         num_classes=num_total_classes, 
         embed_dim=embed_dim, 
         coord_dim=coord_dim_config, 
-        lstm_hidden=hidden_dim,
-        lstm_layers=lstm_layers,
+        trans_dim=trans_dim,
+        n_layers=n_layers,
+        n_heads=n_heads,
         dropout=dropout,
+        mlp_ratio=mlp_ratio,
+        drop_path=drop_path,
         use_bert=use_bert
     )
     model = model.to(device)
@@ -169,22 +196,19 @@ def train_model(
                 if seq_coords_tensor.shape[-1] != 2:
                     seq_coords_tensor = seq_coords_tensor.view(seq_coords_tensor.shape[0], seq_coords_tensor.shape[1], 2)            # 前向传播
             optimizer.zero_grad()
-            
-            # 使用真实的品牌名称和类型数据
-            brand_names = None
-            brand_types = None
-            if use_bert:
-                # 使用实际的品牌信息
-                brand_names = batch_brand_names
-                brand_types = batch_brand_types
-            
-            # 传递品牌信息到模型
-            outputs = model(seq_ids_tensor, seq_coords_tensor, brand_names, brand_types)
-            
-            # 计算损失
-            loss = criterion(outputs, targets_tensor)
-              # 反向传播和优化
+            brand_names = batch_brand_names if use_bert else None
+            brand_types = batch_brand_types if use_bert else None
+            # 支持mixup
+            if use_mixup:
+                outputs, y_a, y_b, lam = model(seq_ids_tensor, seq_coords_tensor, brand_names, brand_types, mixup=True, targets=targets_tensor, mixup_alpha=mixup_alpha)
+                loss = lam * criterion(outputs, y_a) + (1 - lam) * criterion(outputs, y_b)
+            else:
+                outputs = model(seq_ids_tensor, seq_coords_tensor, brand_names, brand_types)
+                loss = criterion(outputs, targets_tensor)
+            # 反向传播和优化
             loss.backward()
+            if grad_clip is not None:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
             optimizer.step()
             
             current_loss = loss.item()
@@ -271,9 +295,12 @@ def train_model(
                             'val_mrr': val_mrr,
                             'embed_dim': embed_dim,
                             'coord_dim': coord_dim_config,
-                            'hidden_dim': hidden_dim,
-                            'lstm_layers': lstm_layers,
+                            'trans_dim': trans_dim,
+                            'n_layers': n_layers,
+                            'n_heads': n_heads,
                             'dropout': dropout,
+                            'mlp_ratio': mlp_ratio,
+                            'drop_path': drop_path,
                             'num_classes': num_total_classes
                         }, model_save_path)
                         print(f"模型已保存至: {model_save_path}")
@@ -365,8 +392,9 @@ if __name__ == "__main__":
         embed_dim=DEFAULT_EMBED_DIM,
         coord=coords_info,
         coord_dim_config=DEFAULT_COORD_DIM,
-        hidden_dim=DEFAULT_HIDDEN_DIM,
-        lstm_layers=DEFAULT_LSTM_LAYERS,
+        trans_dim=DEFAULT_TRANS_DIM,
+        n_layers=DEFAULT_N_LAYERS,
+        n_heads=DEFAULT_N_HEADS,
         dropout=DEFAULT_DROPOUT,
         lr=DEFAULT_LR,
         weight_decay=DEFAULT_WEIGHT_DECAY,

@@ -1,345 +1,169 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from transformers import BertModel, BertTokenizer
-import time
+import math
+
+class DropPath(nn.Module):
+    """Stochastic Depth/DropPath: 随机丢弃残差分支"""
+    def __init__(self, drop_prob=0.1):
+        super().__init__()
+        self.drop_prob = drop_prob
+    def forward(self, x):
+        if not self.training or self.drop_prob == 0.:
+            return x
+        keep_prob = 1 - self.drop_prob
+        shape = (x.shape[0],) + (1,) * (x.ndim - 1)
+        random_tensor = keep_prob + torch.rand(shape, dtype=x.dtype, device=x.device)
+        random_tensor.floor_()
+        return x.div(keep_prob) * random_tensor
+
+class LayerScale(nn.Module):
+    """LayerScale: 可学习缩放残差分支"""
+    def __init__(self, dim, init_value=1e-2):
+        super().__init__()
+        self.gamma = nn.Parameter(init_value * torch.ones(dim))
+    def forward(self, x):
+        return x * self.gamma
+
+class TransformerBlock(nn.Module):
+    def __init__(self, dim, num_heads=4, mlp_ratio=2.0, drop=0.1, drop_path=0.1, layer_scale_init=1e-2):
+        super().__init__()
+        self.norm1 = nn.LayerNorm(dim)
+        self.attn = nn.MultiheadAttention(dim, num_heads, dropout=drop, batch_first=True)
+        self.ls1 = LayerScale(dim, layer_scale_init)
+        self.drop_path1 = DropPath(drop_path)
+        self.norm2 = nn.LayerNorm(dim)
+        hidden_dim = int(dim * mlp_ratio)
+        self.mlp = nn.Sequential(
+            nn.Linear(dim, hidden_dim),
+            nn.GELU(),
+            nn.Dropout(drop),
+            nn.Linear(hidden_dim, dim),
+            nn.Dropout(drop)
+        )
+        self.ls2 = LayerScale(dim, layer_scale_init)
+        self.drop_path2 = DropPath(drop_path)
+    def forward(self, x):
+        # x: (B, T, C)
+        attn_out, _ = self.attn(self.norm1(x), self.norm1(x), self.norm1(x))
+        x = x + self.drop_path1(self.ls1(attn_out))
+        mlp_out = self.mlp(self.norm2(x))
+        x = x + self.drop_path2(self.ls2(mlp_out))
+        return x
+
+def mixup_data(x, y, alpha=0.2):
+    '''Mixup: 数据增强, x: (B, ...), y: (B,)'''
+    if alpha > 0:
+        lam = torch._sample_dirichlet(torch.tensor([alpha, alpha])).max().item()
+    else:
+        lam = 1
+    batch_size = x.size(0)
+    index = torch.randperm(batch_size, device=x.device)
+    mixed_x = lam * x + (1 - lam) * x[index]
+    y_a, y_b = y, y[index]
+    return mixed_x, y_a, y_b, lam
 
 class StorePredictionModel(nn.Module):
-    def __init__(self, num_classes, embed_dim=32, coord_dim=8, lstm_hidden=128, lstm_layers=3, dropout=0.1, 
-                 bert_model_name='bert-base-chinese', use_bert=True, bert_feature_dim=768):
-        """
-        门店选址预测模型。
-
-        参数:
-        num_classes (int): 网格类别的总数。
-        embed_dim (int): 网格ID嵌入的维度。
-        coord_dim (int): 坐标嵌入的维度。如果为0，则不使用坐标嵌入。
-        lstm_hidden (int): LSTM隐藏层的维度。
-        lstm_layers (int): LSTM的层数。
-        dropout (float): Dropout的比例。        
-        bert_model_name (str): 使用的BERT模型名称。
-        use_bert (bool): 是否使用BERT特征提取。
-        bert_feature_dim (int): BERT特征的维度，用于特征对齐。
-        """
-        super(StorePredictionModel, self).__init__()
-
+    def __init__(self, num_classes, embed_dim=32, coord_dim=8, trans_dim=128, n_layers=3, n_heads=4, dropout=0.2, 
+                 bert_model_name='bert-base-chinese', use_bert=True, bert_feature_dim=768, mlp_ratio=2.0, drop_path=0.1):
+        super().__init__()
         self.num_classes = num_classes
         self.embed_dim = embed_dim
         self.coord_dim = coord_dim
-        self.lstm_hidden = lstm_hidden
+        self.trans_dim = trans_dim
         self.use_bert = use_bert
         self.bert_feature_dim = bert_feature_dim
-
-        # BERT模型用于提取店铺名称和类型的语义特征
-        if self.use_bert:
-            try:
-                self.bert_model = BertModel.from_pretrained(bert_model_name)
-                self.bert_tokenizer = BertTokenizer.from_pretrained(bert_model_name)
-                # 冻结BERT参数以减少计算量（可选）
-                for param in self.bert_model.parameters():
-                    param.requires_grad = False
-            except:
-                print(f"警告: 无法加载BERT模型 {bert_model_name}，将禁用BERT特征")
-                self.use_bert = False
-        
-        # BERT特征处理：直接通过MLP处理BERT输出
-        if self.use_bert:
-            # BERT与MLP连接层，增加BatchNorm
-            self.bert_mlp = nn.Sequential(
-                nn.Linear(self.bert_feature_dim, self.bert_feature_dim // 2),
-                nn.BatchNorm1d(self.bert_feature_dim // 2),
-                nn.Tanh(),
-                nn.Dropout(dropout),
-                nn.Linear(self.bert_feature_dim // 2, self.bert_feature_dim // 4),
-                nn.BatchNorm1d(self.bert_feature_dim // 4),
-                nn.SELU(),
-                nn.Dropout(dropout),
-                nn.Linear(self.bert_feature_dim // 4, embed_dim),
-                nn.BatchNorm1d(embed_dim)
-            )
-            self.bert_dropout = nn.Dropout(dropout)
-
-        # 网格ID嵌入层：将每个grid索引映射为embed_dim维向量
-        self.id_embedding = nn.Embedding(num_classes, embed_dim)        # 坐标嵌入：将2维坐标映射为coord_dim维向量
-        # 只有当coord_dim > 0 时才创建此层
-        if self.coord_dim > 0:
+        # Embedding
+        self.id_embedding = nn.Embedding(num_classes, embed_dim)
+        if coord_dim > 0:
             self.coord_embedding_layer = nn.Linear(2, coord_dim)
             self.coord_bn = nn.BatchNorm1d(coord_dim)
         else:
             self.coord_embedding_layer = None
-            self.coord_bn = None        
-        # LSTM层：输入维度为 embed_dim + coord_dim (如果使用坐标嵌入) + embed_dim (如果使用BERT)
-        current_input_dim = embed_dim
-        if self.coord_embedding_layer is not None:
-            current_input_dim += coord_dim
+        # BERT
+        if use_bert:
+            try:
+                self.bert_model = BertModel.from_pretrained(bert_model_name)
+                self.bert_tokenizer = BertTokenizer.from_pretrained(bert_model_name)
+                for p in self.bert_model.parameters():
+                    p.requires_grad = False
+            except:
+                print(f"警告: 无法加载BERT模型 {bert_model_name}，将禁用BERT特征")
+                self.use_bert = False
         if self.use_bert:
-            current_input_dim += embed_dim  # BERT特征经过MLP压缩后的维度
-
-        self.lstm = nn.LSTM(current_input_dim, lstm_hidden, num_layers=lstm_layers, batch_first=True,
-                            dropout=dropout if lstm_layers > 1 else 0)
-        # 注意: LSTM自带的dropout只在多层时作用于层间，单层时不起作用。
-        
-        # LSTM后的批归一化
-        self.lstm_bn = nn.BatchNorm1d(lstm_hidden)
-        
-        # Dropout层
-        self.dropout_layer = nn.Dropout(dropout)# 复杂的MLP层，增加更多层和BatchNorm
+            self.bert_proj = nn.Sequential(
+                nn.Linear(self.bert_feature_dim, embed_dim),
+                nn.BatchNorm1d(embed_dim),
+                nn.GELU(),
+                nn.Dropout(dropout)
+            )
+        # 融合后投影到Transformer输入维度
+        in_dim = embed_dim + (coord_dim if coord_dim > 0 else 0) + (embed_dim if use_bert else 0)
+        self.input_proj = nn.Linear(in_dim, trans_dim)
+        # TransformerEncoder
+        self.transformer = nn.Sequential(*[
+            TransformerBlock(trans_dim, n_heads, mlp_ratio, dropout, drop_path) for _ in range(n_layers)
+        ])
+        self.norm = nn.LayerNorm(trans_dim)
+        # MLP Head
         self.mlp = nn.Sequential(
-            nn.Linear(lstm_hidden, lstm_hidden * 2),
-            nn.BatchNorm1d(lstm_hidden * 2),
-            nn.ReLU6(),
-            nn.Dropout(dropout),
-
-            # nn.Linear(lstm_hidden * 2, lstm_hidden * 2),
-            # nn.BatchNorm1d(lstm_hidden * 2),
-            # nn.LeakyReLU(),
-            # nn.Dropout(dropout),
-            
-            nn.Linear(lstm_hidden * 2, lstm_hidden),
-            nn.BatchNorm1d(lstm_hidden),
+            nn.Linear(trans_dim, trans_dim // 2),
+            nn.BatchNorm1d(trans_dim // 2),
             nn.GELU(),
             nn.Dropout(dropout),
-            
-            nn.Linear(lstm_hidden, lstm_hidden // 2),
-            nn.BatchNorm1d(lstm_hidden // 2),
-            nn.ReLU(),
-            nn.Dropout(dropout),
-            
-            nn.Linear(lstm_hidden // 2, lstm_hidden // 4),
-            nn.BatchNorm1d(lstm_hidden // 4),
-            nn.ReLU(),
+            nn.Linear(trans_dim // 2, trans_dim // 4),
+            nn.BatchNorm1d(trans_dim // 4),
+            nn.GELU(),
             nn.Dropout(dropout)
         )
-
-        # 全连接输出层：映射到num_classes维，用于分类预测
-        self.output_fc = nn.Linear(lstm_hidden // 4, num_classes)
-        
+        self.output_fc = nn.Linear(trans_dim // 4, num_classes)
+        self.dropout_layer = nn.Dropout(dropout)
     def extract_bert_features(self, brand_names, brand_types, seq_len):
-        """
-        从店铺名称和类型中提取BERT特征，直接通过MLP处理
-        
-        参数:
-        brand_names (list): 店铺名称列表
-        brand_types (list): 店铺类型列表
-        seq_len (int): 序列长度，用于特征对齐
-        
-        返回:
-        torch.Tensor: BERT特征张量 (batch, seq_len, embed_dim)
-        """
         if not self.use_bert:
             return None
-            
-        batch_size = len(brand_names)
         device = next(self.parameters()).device
-        
-        # 将店铺名称和类型组合成文本
-        combined_texts = []
-        for name, type_info in zip(brand_names, brand_types):
-            combined_text = f"{name} {type_info}"
-            combined_texts.append(combined_text)
-        
-        # 使用BERT tokenizer处理文本
+        combined_texts = [f"{n} {t}" for n, t in zip(brand_names, brand_types)]
         with torch.no_grad():
             encoded = self.bert_tokenizer(
-                combined_texts,
-                padding=True,
-                truncation=True,
-                max_length=128,
-                return_tensors='pt'
-            )
-            
-            # 将输入移到正确的设备
+                combined_texts, padding=True, truncation=True, max_length=128, return_tensors='pt')
             input_ids = encoded['input_ids'].to(device)
             attention_mask = encoded['attention_mask'].to(device)
-            
-            # 获取BERT特征
             bert_outputs = self.bert_model(input_ids=input_ids, attention_mask=attention_mask)
-            # 使用[CLS] token的表示作为整体文本特征
-            bert_features = bert_outputs.last_hidden_state[:, 0, :]  # (batch, bert_feature_dim)
-        
-        # 直接通过MLP处理BERT特征
-        bert_processed = self.bert_mlp(bert_features)  # (batch, embed_dim)
-        bert_processed = self.bert_dropout(bert_processed)
-        
-        # 扩展到序列长度维度，使每个时间步都有相同的BERT特征
-        # (batch, embed_dim) -> (batch, seq_len, embed_dim)
-        bert_seq_features = bert_processed.unsqueeze(1).expand(-1, seq_len, -1)
-        
+            bert_features = bert_outputs.last_hidden_state[:, 0, :]
+        bert_proj = self.bert_proj(bert_features)
+        bert_seq_features = bert_proj.unsqueeze(1).expand(-1, seq_len, -1)
         return bert_seq_features
-
-    def forward(self, seq_ids, seq_coords=None, brand_names=None, brand_types=None):
-        """
-        模型的前向传播。
-
-        参数:
-        seq_ids (torch.Tensor): 张量 (batch, seq_len)，每个元素为网格的索引表示。
-        seq_coords (torch.Tensor, optional): 张量 (batch, seq_len, 2)，对应每个网格的坐标。
-                                            如果 coord_embedding_layer 为 None，则此参数被忽略。
-        brand_names (list, optional): 店铺名称列表，长度为batch_size。
-        brand_types (list, optional): 店铺类型列表，长度为batch_size。
-
-        返回:
-        torch.Tensor: logits 张量 (batch, num_classes)。
-        """
+    def forward(self, seq_ids, seq_coords=None, brand_names=None, brand_types=None, mixup=False, targets=None, mixup_alpha=0.2):
         batch_size, seq_len = seq_ids.shape[:2]
-
-        # 1. 获取网格ID嵌入表示 (batch, seq_len, embed_dim)
         id_emb = self.id_embedding(seq_ids)
-
-        # 初始化LSTM输入为ID嵌入
-        lstm_input = id_emb
-
-        # 2. 如果使用坐标嵌入
+        features = [id_emb]
         if self.coord_embedding_layer is not None and seq_coords is not None:
-            # 检查坐标维度是否正确
-            if seq_coords.shape[-1] != 2:
-                raise ValueError(f"坐标张量 seq_coords 的最后一维期望是2 (x,y)，但得到的是 {seq_coords.shape[-1]}")            # 将坐标转换为向量表示并应用非线性激活
-            # (batch, seq_len, 2) -> (batch * seq_len, 2)
             coords_flat = seq_coords.reshape(batch_size * seq_len, 2)
-            # (batch * seq_len, 2) -> (batch * seq_len, coord_dim)
             coord_emb_flat = self.coord_embedding_layer(coords_flat)
-            # 应用批归一化（如果可用）
-            if self.coord_bn is not None:
-                coord_emb_flat = self.coord_bn(coord_emb_flat)
-            # 应用激活函数
+            coord_emb_flat = self.coord_bn(coord_emb_flat)
             coord_emb_activated = torch.tanh(coord_emb_flat)
-            # (batch * seq_len, coord_dim) -> (batch, seq_len, coord_dim)
             coord_emb = coord_emb_activated.view(batch_size, seq_len, self.coord_dim)
-
-            # 将ID嵌入和坐标嵌入在特征维度拼接
-            lstm_input = torch.cat([lstm_input, coord_emb], dim=-1)
-        elif self.coord_embedding_layer is not None and seq_coords is None:
-            # print("警告: 模型配置了坐标嵌入，但未提供 seq_coords。将仅使用ID嵌入。")
-            pass  # lstm_input 保持为 id_emb
-
-        # 3. 如果使用BERT特征
+            features.append(coord_emb)
         if self.use_bert and brand_names is not None and brand_types is not None:
             bert_features = self.extract_bert_features(brand_names, brand_types, seq_len)
             if bert_features is not None:
-                # 将BERT特征与现有特征拼接
-                lstm_input = torch.cat([lstm_input, bert_features], dim=-1)
-
-        # 4. 通过 LSTM 层
-        # output: (batch, seq_len, lstm_hidden) - 所有时间步的输出
-        # h_n: (num_layers, batch, lstm_hidden) - 最后一个时间步的隐藏状态
-        # c_n: (num_layers, batch, lstm_hidden) - 最后一个时间步的细胞状态
-        lstm_output, (h_n, c_n) = self.lstm(lstm_input)        # 5. 提取序列最后一个时间步的输出作为整体序列表示
-        # lstm_output 包含了所有时间步的输出，我们取最后一个
-        # last_out: (batch, lstm_hidden)
-        last_out = lstm_output[:, -1, :]
-        
-        # 6. 应用批归一化
-        last_out = self.lstm_bn(last_out)
-
-        # 7. 应用 dropout
-        last_out_dropped = self.dropout_layer(last_out)
-
-        # 7. 通过复杂的MLP
-        mlp_output = self.mlp(last_out_dropped)
-
-        # 8. 输出预测得分 (logits)
-        # logits: (batch, num_classes)
-        logits = self.output_fc(mlp_output)
-
+                features.append(bert_features)
+        x = torch.cat(features, dim=-1)
+        x = self.input_proj(x)
+        x = self.transformer(x)
+        x = self.norm(x)
+        # 取最后一个时间步
+        last_out = x[:, -1, :]
+        last_out = self.dropout_layer(last_out)
+        # Mixup（可选）
+        if mixup and targets is not None:
+            last_out, y_a, y_b, lam = mixup_data(last_out, targets, alpha=mixup_alpha)
+        else:
+            y_a = y_b = lam = None
+        mlp_out = self.mlp(last_out)
+        logits = self.output_fc(mlp_out)
+        if mixup and targets is not None:
+            return logits, y_a, y_b, lam
         return logits
-
-
-if __name__ == '__main__':
-    # 检查GPU可用性
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    print(f"使用设备: {device}")
-    
-    # 示例用法
-    num_classes_example = 100  # 假设有100个不同的网格ID
-    embed_dim_example = 32
-    coord_dim_example = 8  # 使用坐标嵌入
-    lstm_hidden_example = 64
-
-    # 创建模型实例（禁用BERT以避免依赖问题）
-    model_with_coords = StorePredictionModel(
-        num_classes_example, embed_dim_example, coord_dim_example,
-        lstm_hidden_example, use_bert=False
-    ).to(device)
-    model_no_coords = StorePredictionModel(
-        num_classes_example, embed_dim_example, 0,
-        lstm_hidden_example, use_bert=False
-    ).to(device)  # coord_dim=0
-
-    # 准备伪输入数据
-    batch_size_example = 4
-    seq_len_example = 10
-
-    # (batch, seq_len) - 网格ID序列
-    dummy_seq_ids = torch.randint(0, num_classes_example, (batch_size_example, seq_len_example)).to(device)
-    # (batch, seq_len, 2) - 对应的坐标序列 (归一化到0-1)
-    dummy_seq_coords = torch.rand(batch_size_example, seq_len_example, 2).to(device)
-    
-    # 伪造店铺名称和类型数据
-    dummy_brand_names = ["星巴克", "肯德基", "麦当劳", "必胜客"]
-    dummy_brand_types = ["餐饮服务;咖啡厅", "餐饮服务;快餐厅", "餐饮服务;快餐厅", "餐饮服务;披萨店"]
-
-    print("测试带坐标嵌入的模型:")
-    # 前向传播
-    try:
-        logits_output_wc = model_with_coords(dummy_seq_ids, dummy_seq_coords)
-        print(f"输入ID序列形状: {dummy_seq_ids.shape}")
-        print(f"输入坐标序列形状: {dummy_seq_coords.shape}")
-        print(f"输出Logits形状: {logits_output_wc.shape} (应为: ({batch_size_example}, {num_classes_example}))")
-    except Exception as e:
-        print(f"带坐标嵌入的模型前向传播出错: {e}")
-
-    print("\n测试不带坐标嵌入的模型:")
-    try:
-        logits_output_nc = model_no_coords(dummy_seq_ids)  # 不传入坐标
-        print(f"输入ID序列形状: {dummy_seq_ids.shape}")
-        print(f"输出Logits形状: {logits_output_nc.shape} (应为: ({batch_size_example}, {num_classes_example}))")
-    except Exception as e:
-        print(f"不带坐标嵌入的模型前向传播出错: {e}")
-
-    print("\n测试带BERT特征的模型:")
-    try:
-        model_with_bert = StorePredictionModel(
-            num_classes_example, embed_dim_example, coord_dim_example,
-            lstm_hidden_example, use_bert=True
-        ).to(device)
-        
-        # 将输入数据移到GPU（如果使用GPU）
-        seq_ids_gpu = dummy_seq_ids
-        seq_coords_gpu = dummy_seq_coords
-        
-        logits_output_bert = model_with_bert(
-            seq_ids_gpu, seq_coords_gpu, 
-            dummy_brand_names, dummy_brand_types
-        )
-        print(f"输入ID序列形状: {seq_ids_gpu.shape} (设备: {seq_ids_gpu.device})")
-        print(f"输入坐标序列形状: {seq_coords_gpu.shape} (设备: {seq_coords_gpu.device})")
-        print(f"品牌名称: {dummy_brand_names}")
-        print(f"品牌类型: {dummy_brand_types}")
-        print(f"输出Logits形状: {logits_output_bert.shape} (设备: {logits_output_bert.device})")
-        print(f"应为: ({batch_size_example}, {num_classes_example})")
-    except Exception as e:
-        print(f"带BERT特征的模型前向传播出错: {e}")
-    
-    # 测试性能
-    print(f"\n性能测试 (设备: {device}):")
-    
-    # 预热
-    for _ in range(3):
-        with torch.no_grad():
-            _ = model_with_coords(dummy_seq_ids, dummy_seq_coords)
-    
-    # 实际测试
-    torch.cuda.synchronize() if device.type == 'cuda' else None
-    start_time = time.time()
-    
-    num_iterations = 100
-    with torch.no_grad():
-        for _ in range(num_iterations):
-            logits = model_with_coords(dummy_seq_ids, dummy_seq_coords)
-    
-    torch.cuda.synchronize() if device.type == 'cuda' else None
-    end_time = time.time()
-    
-    avg_time = (end_time - start_time) / num_iterations * 1000  # 转换为毫秒
-    print(f"平均推理时间: {avg_time:.2f} ms")
-    print(f"吞吐量: {batch_size_example * num_iterations / (end_time - start_time):.2f} samples/sec")
 
