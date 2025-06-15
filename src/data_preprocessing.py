@@ -36,17 +36,28 @@ def load_data(train_csv, test_csv, grid_csv, method='density'):
     # 读取训练集，按 brand_name分组
     train_df = pd.read_csv(train_csv)
     brand2gids = {}
+    brand2type = {}  # 存储品牌名称到类型的映射
+    
     for _, row in train_df.iterrows():
         brand = row["brand_name"]
+        brand_type = row["brand_type"]
         grid_list = parse_list(row["grid_id_list"]) #将grid_id_list转化为字符串
         brand2gids[brand] = grid_list #将这里面的brand_name跟grid_id_list对照起来
+        brand2type[brand] = brand_type  # 保存品牌类型信息
+        
     # 测试集同理
     test_df = pd.read_csv(test_csv)
     test_brand2gids = {}
+    
     for _, row in test_df.iterrows():
         brand = row["brand_name"]
+        brand_type = row["brand_type"]
         grid_list = parse_list(row["grid_id_list"])
         test_brand2gids[brand] = grid_list
+        
+        # 如果测试集中有新的品牌，也添加到类型映射中
+        if brand not in brand2type:
+            brand2type[brand] = brand_type
     # 构建类别空间
     all_grid_ids = set()#设置的是一个集合，可以去重，其实就是得到一共多少种grid，额，我认为直接用grid这个方法就可以
     for gl in brand2gids.values():
@@ -136,8 +147,7 @@ def load_data(train_csv, test_csv, grid_csv, method='density'):
         #     #数据再处理，获得每个位置的坐标索引
         #     prefix_idx = [grid_to_index[g] for g in prefix]
         #     target_idx = grid_to_index[target]
-        #     #这里获得的是实际坐标
-        #     prefix_coords = [coords_map[g] for g in prefix]
+        #     #这里获得的是实际坐标        #     prefix_coords = [coords_map[g] for g in prefix]
         #     #添加到训练集里面
         #     train_samples.append((prefix_idx, prefix_coords, target_idx))
         prefix = seq[:-1]
@@ -147,8 +157,8 @@ def load_data(train_csv, test_csv, grid_csv, method='density'):
         target_idx = grid_to_index[target]
         # 这里获得的是实际坐标
         prefix_coords = [coords_map[g] for g in prefix]
-        # 添加到训练集里面
-        train_samples.append((prefix_idx, prefix_coords, target_idx))
+        # 添加到训练集里面 - 包含品牌名称和类型
+        train_samples.append((prefix_idx, prefix_coords, target_idx, brand, brand2type[brand]))
     #设置随机种子以保证实验可重复性
     np.random.seed(42)
     # 对训练样本进行随机打乱顺序
@@ -165,8 +175,7 @@ def load_data(train_csv, test_csv, grid_csv, method='density'):
         # 舍弃门店数量太少的品牌（更上面一样，同时，还可以提高正确率
         if len(gids) < 2: continue
         # 使用指定排序方法对门店网格ID进行排序（密度排序或聚类后排序）
-        seq = sort_by_density(gids) if method=='density' else cluster_then_density(gids)
-        # 将最后一个门店作为目标预测点
+        seq = sort_by_density(gids) if method=='density' else cluster_then_density(gids)        # 将最后一个门店作为目标预测点
         prefix = seq[:-1]
         target = seq[-1]
         # 将网格ID转换为模型使用的类别索引
@@ -174,10 +183,46 @@ def load_data(train_csv, test_csv, grid_csv, method='density'):
         target_idx = grid_to_index[target]
         #获得实际坐标
         prefix_coords = [coords_map[g] for g in prefix]
-        #加入数据
-        test_data.append((prefix_idx, prefix_coords, target_idx))
+        #加入数据 - 包含品牌名称和类型
+        test_data.append((prefix_idx, prefix_coords, target_idx, brand, brand2type[brand]))
 
-    return train_data, val_data, test_data, num_classes, coords_map, grid_to_index
+    return train_data, val_data, test_data, num_classes, coords_map, grid_to_index, brand2type
+
+def get_brand_info_mappings(train_csv, test_csv):
+    """
+    从训练集和测试集中提取品牌名称和类型信息
+    
+    参数:
+        train_csv: 训练数据CSV文件路径
+        test_csv: 测试数据CSV文件路径
+        
+    返回:
+        tuple: (brand_to_type_map, train_brands, test_brands)
+            brand_to_type_map: 字典，键为品牌名称，值为品牌类型
+            train_brands: 列表，包含训练集中每个样本对应的品牌名称
+            test_brands: 列表，包含测试集中每个样本对应的品牌名称
+    """
+    # 读取训练集和测试集
+    train_df = pd.read_csv(train_csv)
+    test_df = pd.read_csv(test_csv)
+    
+    # 创建品牌到类型的映射
+    brand_to_type_map = {}
+    
+    # 从训练集中提取品牌和类型信息
+    for _, row in train_df.iterrows():
+        brand = row["brand_name"]
+        brand_type = row["brand_type"]
+        brand_to_type_map[brand] = brand_type
+    
+    # 从测试集中提取品牌和类型信息（如果有任何新的品牌）
+    for _, row in test_df.iterrows():
+        brand = row["brand_name"]
+        brand_type = row["brand_type"]
+        if brand not in brand_to_type_map:
+            brand_to_type_map[brand] = brand_type
+    
+    return brand_to_type_map
 
 
 

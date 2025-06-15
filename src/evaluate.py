@@ -21,7 +21,8 @@ def compute_metrics(model, data_loader, device, k_values=[1, 5, 10]):
 
     with torch.no_grad():
         for batch in data_loader:
-            prefix_idx, prefix_coords, true_idx_val = batch
+            # 解压缩包含品牌信息的批次数据
+            prefix_idx, prefix_coords, true_idx_val, brand_name, brand_type = batch
             seq_ids = torch.tensor(prefix_idx, dtype=torch.long).unsqueeze(0).to(device)
 
             if getattr(model, "coord_dim", 0) > 0 and prefix_coords:
@@ -29,7 +30,21 @@ def compute_metrics(model, data_loader, device, k_values=[1, 5, 10]):
             else:
                 seq_coords_tensor = None
 
-            logits = model(seq_ids, seq_coords_tensor) if seq_coords_tensor is not None else model(seq_ids)
+            # 检查模型是否使用BERT
+            use_bert = getattr(model, "use_bert", False)
+            brand_names = None
+            brand_types = None
+            
+            if use_bert:
+                # 使用真实品牌数据
+                brand_names = [brand_name]
+                brand_types = [brand_type]
+            
+            # 根据是否有坐标和BERT选择适当的前向传播参数
+            if seq_coords_tensor is not None:
+                logits = model(seq_ids, seq_coords_tensor, brand_names, brand_types)
+            else:
+                logits = model(seq_ids, None, brand_names, brand_types)
             probs = logits.softmax(dim=1)
             prob_values, pred_indices_tensor = probs.squeeze(0).sort(descending=True)
             pred_indices_list = pred_indices_tensor.tolist()

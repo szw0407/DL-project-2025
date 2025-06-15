@@ -7,14 +7,12 @@ import os
 import time
 
 # 确保可以从同级目录导入模块
-try:
-    from data_preprocessing import load_data
-    from model import StorePredictionModel
-    from evaluate import compute_metrics
-    from train import train_model  # 导入完整的 train_model 函数
-except ImportError:
-    print("确保 data_preprocessing.py, model.py, evaluate.py 和 train.py 在同一目录下或 PYTHONPATH 中。")
-    raise
+from data_preprocessing import load_data
+from model import StorePredictionModel
+from evaluate import compute_metrics
+from train import train_model  # 导入完整的 train_model 函数
+
+
 
 # --- 全局配置 (Optuna搜索用) ---
 N_TRIALS = 30  # Optuna 试验次数
