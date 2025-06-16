@@ -64,9 +64,46 @@ def mixup_data(x, y, alpha=0.2):
     y_a, y_b = y, y[index]
     return mixed_x, y_a, y_b, lam
 
+class SEBlock(nn.Module):
+    """Squeeze-and-Excitation通道注意力模块"""
+    def __init__(self, channel, reduction=4):
+        super().__init__()
+        self.avg_pool = nn.AdaptiveAvgPool1d(1)
+        self.fc = nn.Sequential(
+            nn.Linear(channel, channel // reduction, bias=False),
+            nn.SiLU(),
+            nn.Linear(channel // reduction, channel, bias=False),
+            nn.Sigmoid()
+        )
+    def forward(self, x):
+        # x: (B, C) or (B, T, C)
+        if x.dim() == 3:
+            # (B, T, C) -> (B, C, T)
+            x_perm = x.permute(0, 2, 1)
+            y = self.avg_pool(x_perm).squeeze(-1)  # (B, C)
+        else:
+            y = x
+        w = self.fc(y)
+        if x.dim() == 3:
+            w = w.unsqueeze(1)  # (B, 1, C)
+        else:
+            w = w  # (B, C)
+        return x * w
+
+class FeatureDropBlock(nn.Module):
+    """特征DropBlock，训练时随机遮蔽部分特征，提升泛化能力"""
+    def __init__(self, drop_prob=0.2):
+        super().__init__()
+        self.drop_prob = drop_prob
+    def forward(self, x):
+        if not self.training or self.drop_prob == 0.:
+            return x
+        mask = (torch.rand_like(x) > self.drop_prob).float()
+        return x * mask
+
 class StorePredictionModel(nn.Module):
-    def __init__(self, num_classes, embed_dim=32, coord_dim=8, trans_dim=128, n_layers=3, n_heads=4, dropout=0.2, 
-                 bert_model_name='bert-base-chinese', use_bert=True, bert_feature_dim=768, mlp_ratio=2.0, drop_path=0.1):
+    def __init__(self, num_classes, embed_dim=32, coord_dim=8, trans_dim=64, n_layers=2, n_heads=4, dropout=0.5, 
+                 bert_model_name='bert-base-chinese', use_bert=True, bert_feature_dim=768, mlp_ratio=2.0, drop_path=0.3):
         super().__init__()
         self.num_classes = num_classes
         self.embed_dim = embed_dim
@@ -86,8 +123,9 @@ class StorePredictionModel(nn.Module):
             try:
                 self.bert_model = BertModel.from_pretrained(bert_model_name)
                 self.bert_tokenizer = BertTokenizer.from_pretrained(bert_model_name)
+                # 允许BERT参数finetune
                 for p in self.bert_model.parameters():
-                    p.requires_grad = False
+                    p.requires_grad = True  # 允许finetune
             except:
                 print(f"警告: 无法加载BERT模型 {bert_model_name}，将禁用BERT特征")
                 self.use_bert = False
@@ -95,30 +133,37 @@ class StorePredictionModel(nn.Module):
             self.bert_proj = nn.Sequential(
                 nn.Linear(self.bert_feature_dim, embed_dim),
                 nn.BatchNorm1d(embed_dim),
-                nn.GELU(),
+                nn.SiLU(),  # GELU -> SiLU
                 nn.Dropout(dropout)
             )
         # 融合后投影到Transformer输入维度
         in_dim = embed_dim + (coord_dim if coord_dim > 0 else 0) + (embed_dim if use_bert else 0)
         self.input_proj = nn.Linear(in_dim, trans_dim)
+        self.input_norm = nn.LayerNorm(trans_dim)  # 新增输入归一化
         # TransformerEncoder
         self.transformer = nn.Sequential(*[
             TransformerBlock(trans_dim, n_heads, mlp_ratio, dropout, drop_path) for _ in range(n_layers)
         ])
         self.norm = nn.LayerNorm(trans_dim)
+        # 全局注意力层
+        self.global_attn = nn.MultiheadAttention(trans_dim, n_heads, dropout=dropout, batch_first=True)
         # MLP Head
         self.mlp = nn.Sequential(
             nn.Linear(trans_dim, trans_dim // 2),
             nn.BatchNorm1d(trans_dim // 2),
-            nn.GELU(),
+            nn.SiLU(),  # GELU -> SiLU
             nn.Dropout(dropout),
             nn.Linear(trans_dim // 2, trans_dim // 4),
             nn.BatchNorm1d(trans_dim // 4),
-            nn.GELU(),
+            nn.SiLU(),  # GELU -> SiLU
+            nn.Dropout(dropout),
+            nn.LayerNorm(trans_dim // 4),
             nn.Dropout(dropout)
         )
         self.output_fc = nn.Linear(trans_dim // 4, num_classes)
         self.dropout_layer = nn.Dropout(dropout)
+        self.se_block = SEBlock(trans_dim)
+        self.feature_dropblock = FeatureDropBlock(drop_prob=0.2)
     def extract_bert_features(self, brand_names, brand_types, seq_len):
         if not self.use_bert:
             return None
@@ -151,10 +196,15 @@ class StorePredictionModel(nn.Module):
                 features.append(bert_features)
         x = torch.cat(features, dim=-1)
         x = self.input_proj(x)
+        x = self.input_norm(x)  # 新增输入归一化
+        x = self.feature_dropblock(x)  # 特征DropBlock增强泛化
         x = self.transformer(x)
         x = self.norm(x)
-        # 取最后一个时间步
-        last_out = x[:, -1, :]
+        # 全局注意力：以第一个token为query，所有token为key/value
+        global_query = x[:, :1, :]  # (B, 1, C)
+        global_out, _ = self.global_attn(global_query, x, x)  # (B, 1, C)
+        last_out = global_out.squeeze(1)  # (B, C)
+        last_out = self.se_block(last_out)  # SE通道注意力增强
         last_out = self.dropout_layer(last_out)
         # Mixup（可选）
         if mixup and targets is not None:
@@ -163,6 +213,7 @@ class StorePredictionModel(nn.Module):
             y_a = y_b = lam = None
         mlp_out = self.mlp(last_out)
         logits = self.output_fc(mlp_out)
+        # logits = torch.softmax(logits, dim=-1)  # 如为分类任务可解注释
         if mixup and targets is not None:
             return logits, y_a, y_b, lam
         return logits
