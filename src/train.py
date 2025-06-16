@@ -403,7 +403,7 @@ def train_model(
         val_acc_k = {k: correct_at_k[k] / len(val_samples) for k in correct_at_k}
         val_mrr = np.mean(reciprocal_ranks) if reciprocal_ranks else 0.0
         # 统一综合指标
-        composite_score = 10 * val_mrr + val_acc_k[1] + val_acc_k[5] + val_acc_k[10]
+        composite_score = 20 * val_mrr + val_acc_k[1] + val_acc_k[5] + val_acc_k[10]
         
         # 记录指标用于绘图
         train_losses.append(avg_train_loss)
