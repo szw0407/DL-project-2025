@@ -10,11 +10,11 @@ from data_preprocessing import load_data
 from model import StorePredictionModel
 from evaluate import compute_metrics
 plt.rcParams['font.family'] = 'Noto Sans SC'
-DEFAULT_EMBED_DIM = 48
-DEFAULT_COORD_DIM = 18
-DEFAULT_HIDDEN_DIM = 128
-DEFAULT_LSTM_LAYERS = 64
-DEFAULT_DROPOUT = 0.2
+DEFAULT_EMBED_DIM = 32
+DEFAULT_COORD_DIM = 12
+DEFAULT_HIDDEN_DIM = 32
+DEFAULT_LSTM_LAYERS = 8
+DEFAULT_DROPOUT = 0.1
 DEFAULT_LR = 1e-3
 DEFAULT_WEIGHT_DECAY = 1e-5
 DEFAULT_EPOCHS = 1000
@@ -283,13 +283,26 @@ def train_model(
                 f"验证 Acc@5: {val_acc_k[5]:.4f}, " +
                 f"验证 Acc@10: {val_acc_k[10]:.4f}")
         
-        # 综合判断所有指标是否都没有变差
-        improved = False
-        if (val_mrr > best_val_mrr and val_acc_k[1] >= best_val_acc1 and val_acc_k[5] >= best_val_acc5 and val_acc_k[10] >= best_val_acc10) or \
-           (val_acc_k[1] > best_val_acc1 and val_mrr >= best_val_mrr and val_acc_k[5] >= best_val_acc5 and val_acc_k[10] >= best_val_acc10) or \
-           (val_acc_k[5] > best_val_acc5 and val_mrr >= best_val_mrr and val_acc_k[1] >= best_val_acc1 and val_acc_k[10] >= best_val_acc10) or \
-           (val_acc_k[10] > best_val_acc10 and val_mrr >= best_val_mrr and val_acc_k[1] >= best_val_acc1 and val_acc_k[5] >= best_val_acc5):
-            improved = True
+        # 综合判断指标提升/下降数量
+        improved_count = 0
+        declined_count = 0
+        if val_mrr > best_val_mrr:
+            improved_count += 1
+        elif val_mrr < best_val_mrr:
+            declined_count += 1
+        if val_acc_k[1] > best_val_acc1:
+            improved_count += 1
+        elif val_acc_k[1] < best_val_acc1:
+            declined_count += 1
+        if val_acc_k[5] > best_val_acc5:
+            improved_count += 1
+        elif val_acc_k[5] < best_val_acc5:
+            declined_count += 1
+        if val_acc_k[10] > best_val_acc10:
+            improved_count += 1
+        elif val_acc_k[10] < best_val_acc10:
+            declined_count += 1
+        improved = (improved_count >= 2 and declined_count <= 2)
 
         if improved:
             # 修复类型问题，直接赋值而不是max（因为improved时必然是更优）
