@@ -121,8 +121,16 @@ class StorePredictionModel(nn.Module):
             self.coord_bn = nn.BatchNorm1d(coord_dim)
         else:
             self.coord_embedding_layer = None
-        # brand_type embedding
+        # brand_type embedding + MLP
         self.brand_type_embedding = nn.Embedding(brand_type_num, brand_type_embed_dim)
+        self.brand_type_mlp = nn.Sequential(
+            nn.Linear(brand_type_embed_dim, 16),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(16, 16),
+            nn.ReLU(),
+            nn.Dropout(dropout)
+        )
         # BERT
         if use_bert:
             try:
@@ -142,7 +150,7 @@ class StorePredictionModel(nn.Module):
                 nn.Dropout(dropout)
             )
         # 融合后投影到Transformer输入维度
-        in_dim = embed_dim + (coord_dim if coord_dim > 0 else 0) + (embed_dim if use_bert else 0) + brand_type_embed_dim
+        in_dim = embed_dim + (coord_dim if coord_dim > 0 else 0) + (embed_dim if use_bert else 0) + 16
         self.input_proj = nn.Linear(in_dim, trans_dim)
         self.input_norm = nn.LayerNorm(trans_dim)  # 新增输入归一化
         # TransformerEncoder
@@ -199,15 +207,15 @@ class StorePredictionModel(nn.Module):
             bert_features = self.extract_bert_features(brand_names, brand_types, seq_len)
             if bert_features is not None:
                 features.append(bert_features)
-        # 新增brand_type embedding特征，自动编码
+        # 新增brand_type embedding+MLP特征，自动编码
         if brand_type_ids is None and brand_types is not None and hasattr(self, 'brand_type_to_id'):
-            # 自动编码brand_type字符串为id
             brand_type_ids = [self.brand_type_to_id.get(bt, 0) for bt in brand_types]
             brand_type_ids = torch.tensor(brand_type_ids, dtype=torch.long, device=seq_ids.device)
         if brand_type_ids is not None:
             brand_type_emb = self.brand_type_embedding(brand_type_ids)  # (B, D)
-            brand_type_emb = brand_type_emb.unsqueeze(1).expand(-1, seq_len, -1)  # (B, T, D)
-            features.append(brand_type_emb)
+            brand_type_feat = self.brand_type_mlp(brand_type_emb)      # (B, 16)
+            brand_type_feat = brand_type_feat.unsqueeze(1).expand(-1, seq_len, -1)  # (B, T, 16)
+            features.append(brand_type_feat)
         x = torch.cat(features, dim=-1)
         x = self.input_proj(x)
         x = self.input_norm(x)  # 新增输入归一化
