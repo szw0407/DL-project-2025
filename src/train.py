@@ -1,3 +1,4 @@
+from unittest.mock import DEFAULT
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -8,7 +9,6 @@ import matplotlib.pyplot as plt
 from tqdm import tqdm
 from data_preprocessing import load_data
 from model import StorePredictionModel
-from evaluate import compute_metrics
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import LambdaLR
 
@@ -22,18 +22,18 @@ DEFAULT_EMBED_DIM = 48  # 适当提升表达力
 DEFAULT_COORD_DIM = 8   # 降低坐标嵌入维度
 DEFAULT_HIDDEN_DIM = 32
 DEFAULT_LSTM_LAYERS = 8
-DEFAULT_DROPOUT = 0.2   # 增大Dropout
-DEFAULT_LR = 2e-3
-DEFAULT_WEIGHT_DECAY = 5e-3  # 增大权重衰减
-DEFAULT_EPOCHS = 200
-DEFAULT_PATIENCE = 20
+DEFAULT_DROPOUT = 0.15  # 降低Dropout
+DEFAULT_LR = 4e-3  # 提高学习率
+DEFAULT_WEIGHT_DECAY = 1e-4  # 增加权重衰减
+DEFAULT_EPOCHS = 300  # 增加训练轮数
 DEFAULT_TRANS_DIM = 96  # 降低Transformer维度
 DEFAULT_N_LAYERS = 2    # 降低层数
 DEFAULT_N_HEADS = 4     # 降低头数
 DEFAULT_MLP_RATIO = 2.0
-DEFAULT_DROP_PATH = 0.3 # 增大DropPath
-DEFAULT_BATCH_SIZE = 32
+DEFAULT_DROP_PATH = 0.15 # 降低DropPath
+DEFAULT_BATCH_SIZE = 144
 DEFAULT_OPTIMIZER = 'adamw'
+DEFAULT_PATIENCE = 10
 
 class StochasticDepthScheduler:
     """训练过程中动态调整DropPath概率，提升泛化能力"""
@@ -123,6 +123,9 @@ def get_warmup_scheduler(optimizer, warmup_steps, total_steps):
             return float(current_step) / float(max(1, warmup_steps))
         return max(0.0, float(total_steps - current_step) / float(max(1, total_steps - warmup_steps)))
     return LambdaLR(optimizer, lr_lambda)
+
+def get_loss_fn(num_classes, smoothing=0.0):
+    return nn.CrossEntropyLoss()
 
 def train_model(
     train_samples, 
@@ -236,6 +239,7 @@ def train_model(
     patience_counter = 0
     best_model_state = None
     best_epoch = 0
+    best_score = -float('inf')
     
     # 自适应学习率调度器
     lr_scheduler = AdaptiveLRScheduler(optimizer, factor=0.5, patience=5, min_lr=1e-6)
@@ -377,6 +381,8 @@ def train_model(
           # 计算最终指标
         val_acc_k = {k: correct_at_k[k] / len(val_samples) for k in correct_at_k}
         val_mrr = np.mean(reciprocal_ranks) if reciprocal_ranks else 0.0
+        # 统一综合指标
+        composite_score = 10 * val_mrr + val_acc_k[1] + val_acc_k[5] + val_acc_k[10]
         
         # 记录指标用于绘图
         train_losses.append(avg_train_loss)
@@ -386,42 +392,17 @@ def train_model(
         val_acc10s.append(val_acc_k[10])
         print(f"\nEpoch {epoch + 1}/{epochs} - "
               f"训练损失: {avg_train_loss:.4f}, " +
-                f"验证 MRR: {val_mrr:.4f}, " +
-                f"验证 Acc@1: {val_acc_k[1]:.4f}, " +
-                f"验证 Acc@5: {val_acc_k[5]:.4f}, " +
-                f"验证 Acc@10: {val_acc_k[10]:.4f}")
-        
-        # 综合判断指标提升/下降数量
-        improved_count = 0
-        declined_count = 0
-        if val_mrr > best_val_mrr:
-            improved_count += 1
-        elif val_mrr < best_val_mrr:
-            declined_count += 1
-        if val_acc_k[1] > best_val_acc1:
-            improved_count += 1
-        elif val_acc_k[1] < best_val_acc1:
-            declined_count += 1
-        if val_acc_k[5] > best_val_acc5:
-            improved_count += 1
-        elif val_acc_k[5] < best_val_acc5:
-            declined_count += 1
-        if val_acc_k[10] > best_val_acc10:
-            improved_count += 1
-        elif val_acc_k[10] < best_val_acc10:
-            declined_count += 1
-        improved = (improved_count >= 2 and declined_count <= 2)
-
-        if improved:
-            # 修复类型问题，直接赋值而不是max（因为improved时必然是更优）
-            best_val_mrr = val_mrr
-            best_val_acc1 = val_acc_k[1]
-            best_val_acc5 = val_acc_k[5]
-            best_val_acc10 = val_acc_k[10]
-            patience_counter = 0
+              f"验证 MRR: {val_mrr:.4f}, " +
+              f"验证 Acc@1: {val_acc_k[1]:.4f}, " +
+              f"验证 Acc@5: {val_acc_k[5]:.4f}, " +
+              f"验证 Acc@10: {val_acc_k[10]:.4f}, " +
+              f"综合指标: {composite_score:.4f}")
+        # 以综合指标为唯一标准
+        if composite_score > best_score:
+            best_score = composite_score
             best_model_state = model.state_dict().copy()
             best_epoch = epoch
-            # 如果指定了保存路径，保存模型
+            patience_counter = 0
             if model_save_path:
                 while True:
                     try:
@@ -430,6 +411,10 @@ def train_model(
                             'model_state_dict': model.state_dict(),
                             'optimizer_state_dict': optimizer.state_dict(),
                             'val_mrr': val_mrr,
+                            'val_acc1': val_acc_k[1],
+                            'val_acc5': val_acc_k[5],
+                            'val_acc10': val_acc_k[10],
+                            'composite_score': composite_score,
                             'embed_dim': embed_dim,
                             'coord_dim': coord_dim_config,
                             'trans_dim': trans_dim,
@@ -451,18 +436,18 @@ def train_model(
             if patience_counter >= patience:
                 print(f"早停触发: {patience}轮未改善")
                 break
-        # 训练循环后，早停判断
-        early_stopper(val_mrr, model)
-        lr_scheduler.step(val_mrr)
-        if early_stopper.early_stop:
-            print(f"[EarlyStopping] 训练提前终止，最佳MRR: {early_stopper.best_score:.4f}")
-            if early_stopper.best_state is not None:
-                model.load_state_dict(early_stopper.best_state)
-            break
+    # 训练循环后，早停判断
+    early_stopper(val_mrr, model)
+    lr_scheduler.step(val_mrr)
+    if early_stopper.early_stop:
+        print(f"[EarlyStopping] 训练提前终止，最佳MRR: {early_stopper.best_score:.4f}")
+        if early_stopper.best_state is not None:
+            model.load_state_dict(early_stopper.best_state)
+        return model
       # 加载最佳模型权重
     if best_model_state:
         model.load_state_dict(best_model_state)
-        print(f"已加载最佳模型 (验证 MRR: {best_val_mrr:.4f})")
+        print(f"已加载最佳模型 (综合指标: {best_score:.4f})")
     
     # 绘制训练过程中的指标变化
     if len(train_losses) > 0:
@@ -555,6 +540,17 @@ if __name__ == "__main__":
     print(f"数据加载完成。类别总数: {num_total_classes}")
     print(f"训练样本数: {len(train_samples)}, 验证样本数: {len(val_samples)}, 测试样本数: {len(test_samples)}")
     print(f"品牌总数: {len(brand_type_map)}")
+
+    # 数据增强扩展训练集
+    aug_times = 6  # 每个样本增强4次
+    augmented = []
+    for sample in train_samples:
+        seq_ids, seq_coords, target_idx, brand_name, brand_type = sample
+        for _ in range(aug_times):
+            aug_ids, aug_coords = augment_sequence(seq_ids, seq_coords, mask_prob=0.3, do_flip=True, do_rotate=True)
+            augmented.append((aug_ids, aug_coords, target_idx, brand_name, brand_type))
+    train_samples = train_samples + augmented
+    print(f"扩展后训练样本数: {len(train_samples)}")
 
     trained_model = train_model(
         train_samples,
