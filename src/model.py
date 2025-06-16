@@ -103,7 +103,7 @@ class FeatureDropBlock(nn.Module):
 
 class StorePredictionModel(nn.Module):
     def __init__(self, num_classes, embed_dim=32, coord_dim=8, trans_dim=64, n_layers=2, n_heads=4, dropout=0.5, 
-                 bert_model_name='bert-base-chinese', use_bert=True, bert_feature_dim=768, mlp_ratio=2.0, drop_path=0.3):
+                 bert_model_name='bert-base-chinese', use_bert=True, bert_feature_dim=768, mlp_ratio=2.0, drop_path=0.3, brand_type_num=64, brand_type_embed_dim=8, brand_type_to_id=None):
         super().__init__()
         self.num_classes = num_classes
         self.embed_dim = embed_dim
@@ -111,6 +111,9 @@ class StorePredictionModel(nn.Module):
         self.trans_dim = trans_dim
         self.use_bert = use_bert
         self.bert_feature_dim = bert_feature_dim
+        self.brand_type_num = brand_type_num
+        self.brand_type_embed_dim = brand_type_embed_dim
+        self.brand_type_to_id = brand_type_to_id if brand_type_to_id is not None else {}
         # Embedding
         self.id_embedding = nn.Embedding(num_classes, embed_dim)
         if coord_dim > 0:
@@ -118,6 +121,8 @@ class StorePredictionModel(nn.Module):
             self.coord_bn = nn.BatchNorm1d(coord_dim)
         else:
             self.coord_embedding_layer = None
+        # brand_type embedding
+        self.brand_type_embedding = nn.Embedding(brand_type_num, brand_type_embed_dim)
         # BERT
         if use_bert:
             try:
@@ -137,7 +142,7 @@ class StorePredictionModel(nn.Module):
                 nn.Dropout(dropout)
             )
         # 融合后投影到Transformer输入维度
-        in_dim = embed_dim + (coord_dim if coord_dim > 0 else 0) + (embed_dim if use_bert else 0)
+        in_dim = embed_dim + (coord_dim if coord_dim > 0 else 0) + (embed_dim if use_bert else 0) + brand_type_embed_dim
         self.input_proj = nn.Linear(in_dim, trans_dim)
         self.input_norm = nn.LayerNorm(trans_dim)  # 新增输入归一化
         # TransformerEncoder
@@ -179,7 +184,7 @@ class StorePredictionModel(nn.Module):
         bert_proj = self.bert_proj(bert_features)
         bert_seq_features = bert_proj.unsqueeze(1).expand(-1, seq_len, -1)
         return bert_seq_features
-    def forward(self, seq_ids, seq_coords=None, brand_names=None, brand_types=None, mixup=False, targets=None, mixup_alpha=0.2):
+    def forward(self, seq_ids, seq_coords=None, brand_names=None, brand_types=None, brand_type_ids=None, mixup=False, targets=None, mixup_alpha=0.2):
         batch_size, seq_len = seq_ids.shape[:2]
         id_emb = self.id_embedding(seq_ids)
         features = [id_emb]
@@ -194,6 +199,15 @@ class StorePredictionModel(nn.Module):
             bert_features = self.extract_bert_features(brand_names, brand_types, seq_len)
             if bert_features is not None:
                 features.append(bert_features)
+        # 新增brand_type embedding特征，自动编码
+        if brand_type_ids is None and brand_types is not None and hasattr(self, 'brand_type_to_id'):
+            # 自动编码brand_type字符串为id
+            brand_type_ids = [self.brand_type_to_id.get(bt, 0) for bt in brand_types]
+            brand_type_ids = torch.tensor(brand_type_ids, dtype=torch.long, device=seq_ids.device)
+        if brand_type_ids is not None:
+            brand_type_emb = self.brand_type_embedding(brand_type_ids)  # (B, D)
+            brand_type_emb = brand_type_emb.unsqueeze(1).expand(-1, seq_len, -1)  # (B, T, D)
+            features.append(brand_type_emb)
         x = torch.cat(features, dim=-1)
         x = self.input_proj(x)
         x = self.input_norm(x)  # 新增输入归一化

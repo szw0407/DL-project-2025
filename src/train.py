@@ -124,8 +124,8 @@ def get_warmup_scheduler(optimizer, warmup_steps, total_steps):
         return max(0.0, float(total_steps - current_step) / float(max(1, total_steps - warmup_steps)))
     return LambdaLR(optimizer, lr_lambda)
 
-def get_loss_fn(num_classes, smoothing=0.0):
-    return nn.CrossEntropyLoss()
+def get_loss_fn(num_classes, smoothing=0.1):
+    return nn.CrossEntropyLoss(label_smoothing=smoothing)
 
 def train_model(
     train_samples, 
@@ -151,7 +151,8 @@ def train_model(
     mixup_alpha=0.2,
     grad_clip=2.0,
     batch_size=DEFAULT_BATCH_SIZE,
-    optimizer_type=DEFAULT_OPTIMIZER
+    optimizer_type=DEFAULT_OPTIMIZER,
+    brand_type_map=None
 ):
     """
     训练门店选址预测模型。
@@ -181,6 +182,8 @@ def train_model(
         use_mixup: 是否使用mixup数据增强，默认为True
         mixup_alpha: mixup的α超参数
         grad_clip: 梯度裁剪的阈值，默认为2.0
+        optimizer_type: 优化器类型，'adamw'或'lookahead'
+        brand_type_map: 品牌类型映射字典，键为品牌名称，值为类型ID
 
     返回:
         训练好的模型
@@ -206,6 +209,14 @@ def train_model(
     device = torch.device(device_name if torch.cuda.is_available() and device_name == 'cuda' else 'cpu')
     print(f"使用设备: {device}")
     
+    # 统计brand_type类别数及编码映射
+    if brand_type_map is not None:
+        brand_type_list = list(set(brand_type_map.values()))
+        brand_type_to_id = {t: i for i, t in enumerate(brand_type_list)}
+        brand_type_num = len(brand_type_list)
+    else:
+        brand_type_to_id = {}
+        brand_type_num = 64
     # 初始化模型
     model = StorePredictionModel(
         num_classes=num_total_classes, 
@@ -217,18 +228,21 @@ def train_model(
         dropout=dropout,
         mlp_ratio=mlp_ratio,
         drop_path=drop_path,
-        use_bert=use_bert
+        use_bert=use_bert,
+        brand_type_num=brand_type_num,
+        brand_type_embed_dim=8
     )
     model = model.to(device)
     # 特色功能1：动态DropPath调度器
     drop_path_scheduler = StochasticDepthScheduler(model, max_drop_path=drop_path, min_drop_path=0.05, total_epochs=epochs)
     
     # 定义损失函数和优化器
-    criterion = nn.CrossEntropyLoss()
+    criterion = get_loss_fn(num_total_classes, smoothing=0.1)
     optimizer = get_optimizer(model, lr, weight_decay, optimizer_type)
     total_steps = epochs * max(1, len(train_samples) // batch_size)
     warmup_steps = int(0.1 * total_steps)
     warmup_scheduler = get_warmup_scheduler(optimizer, warmup_steps, total_steps)
+    cosine_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs, eta_min=1e-6)
     
     early_stopper = EarlyStopping(patience=patience)
       # 定义早停相关变量
@@ -282,6 +296,7 @@ def train_model(
             batch_targets = []
             batch_brand_names = []
             batch_brand_types = []
+            batch_brand_type_ids = []
             max_seq_len = max(len(seq_ids) for seq_ids, _, _, _, _ in batch)
             for seq_ids, seq_coords, target_idx, brand_name, brand_type in batch:
                 seq_ids_aug, seq_coords_aug = augment_sequence(seq_ids, seq_coords)
@@ -296,6 +311,11 @@ def train_model(
                 batch_targets.append(target_idx)
                 batch_brand_names.append(brand_name)
                 batch_brand_types.append(brand_type)
+                # 新增brand_type编码
+                if brand_type in brand_type_to_id:
+                    batch_brand_type_ids.append(brand_type_to_id[brand_type])
+                else:
+                    batch_brand_type_ids.append(0)
             # CutMix增强
             batch_seq_ids, batch_seq_coords, batch_targets = cutmix_batch(batch_seq_ids, batch_seq_coords if coord_dim_config > 0 else None, batch_targets)
             
@@ -313,12 +333,13 @@ def train_model(
             optimizer.zero_grad()
             brand_names = batch_brand_names if use_bert else None
             brand_types = batch_brand_types if use_bert else None
+            brand_type_ids = torch.tensor(batch_brand_type_ids, dtype=torch.long).to(device)
             # 支持mixup
             if use_mixup:
-                outputs, y_a, y_b, lam = model(seq_ids_tensor, seq_coords_tensor, brand_names, brand_types, mixup=True, targets=targets_tensor, mixup_alpha=mixup_alpha)
+                outputs, y_a, y_b, lam = model(seq_ids_tensor, seq_coords_tensor, brand_names, brand_types, brand_type_ids=brand_type_ids, mixup=True, targets=targets_tensor, mixup_alpha=mixup_alpha)
                 loss = lam * criterion(outputs, y_a) + (1 - lam) * criterion(outputs, y_b)
             else:
-                outputs = model(seq_ids_tensor, seq_coords_tensor, brand_names, brand_types)
+                outputs = model(seq_ids_tensor, seq_coords_tensor, brand_names, brand_types, brand_type_ids=brand_type_ids)
                 loss = criterion(outputs, targets_tensor)
             # 反向传播和优化
             loss.backward()
@@ -570,7 +591,8 @@ if __name__ == "__main__":
         device_name='cuda' if USE_CUDA_IF_AVAILABLE else 'cpu',
         model_save_path=model_output_path,
         batch_size=DEFAULT_BATCH_SIZE,
-        optimizer_type=DEFAULT_OPTIMIZER
+        optimizer_type=DEFAULT_OPTIMIZER,
+        brand_type_map=brand_type_map
     )
     
     if trained_model and test_samples:
