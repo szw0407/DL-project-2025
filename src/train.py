@@ -14,22 +14,22 @@ from torch.optim.lr_scheduler import LambdaLR
 import random
 
 plt.rcParams['font.family'] = 'Noto Sans SC'
-DEFAULT_EMBED_DIM = 60  # 适当提升表达力
-DEFAULT_COORD_DIM = 6   # 降低坐标嵌入维度
-DEFAULT_HIDDEN_DIM = 32
+DEFAULT_EMBED_DIM = 64  # 提升嵌入维度以增强表达力
+DEFAULT_COORD_DIM = 12   # 提升坐标嵌入维度
+DEFAULT_HIDDEN_DIM = 64  # 提升隐藏层维度
 DEFAULT_LSTM_LAYERS = 8
-DEFAULT_DROPOUT = 0.2  # 降低Dropout
-DEFAULT_LR = 1e-3  # 提高学习率
-DEFAULT_WEIGHT_DECAY = 1e-4  # 极致提升权重衰减
-DEFAULT_EPOCHS = 300  # 增加训练轮数
-DEFAULT_TRANS_DIM = 32  # 降低Transformer维度
-DEFAULT_N_LAYERS = 2    # 降低层数
-DEFAULT_N_HEADS = 4     # 降低头数
-DEFAULT_MLP_RATIO = 2.0  # 降低MLP扩展比
-DEFAULT_DROP_PATH = 0.15 # 降低DropPath
-DEFAULT_BATCH_SIZE = 144
+DEFAULT_DROPOUT = 0.3  # 适当降低Dropout
+DEFAULT_LR = 8e-4  # 适当降低学习率，适应更大的模型
+DEFAULT_WEIGHT_DECAY = 1e-4  
+DEFAULT_EPOCHS = 300  
+DEFAULT_TRANS_DIM = 64  # 提升Transformer维度
+DEFAULT_N_LAYERS = 4    # 增加层数以提升特征学习能力
+DEFAULT_N_HEADS = 8     # 增加注意力头数
+DEFAULT_MLP_RATIO = 4.0  # 增加MLP扩展比
+DEFAULT_DROP_PATH = 0.3 # 适当降低DropPath
+DEFAULT_BATCH_SIZE = 48  # 适当降低batch size以适应更大的模型
 DEFAULT_OPTIMIZER = 'adamw'
-DEFAULT_PATIENCE = 10  # 极致收紧early stop
+DEFAULT_PATIENCE = 15  # 增加patience，给更深模型更多训练时间
 
 class StochasticDepthScheduler:
     """训练过程中动态调整DropPath概率，提升泛化能力"""

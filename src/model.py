@@ -36,25 +36,29 @@ class TransformerBlock(nn.Module):
         self,
         dim,
         num_heads=4,
-        mlp_ratio=2.0,
+        mlp_ratio=4.0,  # 增加MLP扩展比例
         drop=0.1,
         drop_path=0.1,
         layer_scale_init=1e-2,
     ):
         super().__init__()
-        self.norm1 = nn.LayerNorm(dim)
+        self.norm1 = nn.LayerNorm(dim, eps=1e-6)  # 提升数值稳定性
         self.attn = nn.MultiheadAttention(
             dim, num_heads, dropout=drop, batch_first=True
         )
         self.ls1 = LayerScale(dim, layer_scale_init)
         self.drop_path1 = DropPath(drop_path)
-        self.norm2 = nn.LayerNorm(dim)
+        self.norm2 = nn.LayerNorm(dim, eps=1e-6)
         hidden_dim = int(dim * mlp_ratio)
+        # 增强MLP：添加中间层和更好的激活函数
         self.mlp = nn.Sequential(
             nn.Linear(dim, hidden_dim),
-            nn.GELU(),
+            nn.SiLU(),  # 使用SiLU激活函数，比GELU更强
             nn.Dropout(drop),
-            nn.Linear(hidden_dim, dim),
+            nn.Linear(hidden_dim, hidden_dim // 2),  # 添加中间层
+            nn.SiLU(),
+            nn.Dropout(drop),
+            nn.Linear(hidden_dim // 2, dim),
             nn.Dropout(drop),
         )
         self.ls2 = LayerScale(dim, layer_scale_init)
@@ -62,8 +66,12 @@ class TransformerBlock(nn.Module):
 
     def forward(self, x):
         # x: (B, T, C)
-        attn_out, _ = self.attn(self.norm1(x), self.norm1(x), self.norm1(x))
+        # Pre-norm attention with stronger residual
+        norm_x = self.norm1(x)
+        attn_out, _ = self.attn(norm_x, norm_x, norm_x)
         x = x + self.drop_path1(self.ls1(attn_out))
+        
+        # Pre-norm MLP with stronger residual
         mlp_out = self.mlp(self.norm2(x))
         x = x + self.drop_path2(self.ls2(mlp_out))
         return x
@@ -140,19 +148,19 @@ class StorePredictionModel(nn.Module):
     def __init__(
         self,
         num_classes,
-        embed_dim=32,
-        coord_dim=8,
-        trans_dim=32,  # 极致收缩主干宽度
-        n_layers=2,    # 极致收缩层数
-        n_heads=4,
-        dropout=0.4,   # Dropout极致提升
+        embed_dim=64,      # 增加嵌入维度 32->64
+        coord_dim=12,      # 增加坐标维度 8->12  
+        trans_dim=64,      # 增加主干维度 32->64
+        n_layers=4,        # 增加层数 2->4
+        n_heads=8,         # 增加注意力头数 4->8
+        dropout=0.3,       # 适当降低dropout
         bert_model_name="bert-base-chinese",
         use_bert=True,
         bert_feature_dim=768,
-        mlp_ratio=2.0,
-        drop_path=0.5, # DropPath极致提升
+        mlp_ratio=4.0,     # 增加MLP扩展比例 2.0->4.0
+        drop_path=0.3,     # 适当降低drop_path
         brand_type_num=64,
-        brand_type_embed_dim=8,
+        brand_type_embed_dim=12,  # 增加brand_type嵌入维度
         brand_type_to_id=None,
         use_multiscale_conv=True,
         use_spatial_stats=True,
@@ -177,15 +185,14 @@ class StorePredictionModel(nn.Module):
             self.coord_embedding_layer = nn.Linear(2, coord_dim)
             self.coord_bn = nn.BatchNorm1d(coord_dim)
         else:
-            self.coord_embedding_layer = None
-        # brand_type embedding + MLP
+            self.coord_embedding_layer = None        # brand_type embedding + MLP (增强)
         self.brand_type_embedding = nn.Embedding(brand_type_num, brand_type_embed_dim)
         self.brand_type_mlp = nn.Sequential(
-            nn.Linear(brand_type_embed_dim, 16),
-            nn.ReLU(),
+            nn.Linear(brand_type_embed_dim, 32),
+            nn.SiLU(),
             nn.Dropout(dropout),
-            nn.Linear(16, 16),
-            nn.ReLU(),
+            nn.Linear(32, 24),  # 输出24维
+            nn.SiLU(),
             nn.Dropout(dropout),
         )
         # BERT
@@ -211,37 +218,46 @@ class StorePredictionModel(nn.Module):
                 nn.BatchNorm1d(embed_dim),
                 nn.ReLU(),
                 nn.Dropout(dropout),
-            )
-        # 多尺度卷积特征融合（可选）
+            )        # 增强多尺度卷积特征融合（可选）
         if use_multiscale_conv:
-            self.conv1 = nn.Conv1d(embed_dim, 32, kernel_size=1, padding=0)
-            self.conv3 = nn.Conv1d(embed_dim, 32, kernel_size=3, padding=1)
-            self.conv5 = nn.Conv1d(embed_dim, 32, kernel_size=5, padding=2)
-            self.conv_bn = nn.BatchNorm1d(32 * 3)
-            self.conv_act = nn.ReLU()
-        # 空间统计特征分支（可选）
+            # 增加更多卷积核尺寸和深度
+            self.conv1 = nn.Conv1d(embed_dim, 64, kernel_size=1, padding=0)
+            self.conv3 = nn.Conv1d(embed_dim, 64, kernel_size=3, padding=1)
+            self.conv5 = nn.Conv1d(embed_dim, 64, kernel_size=5, padding=2)
+            self.conv7 = nn.Conv1d(embed_dim, 64, kernel_size=7, padding=3)  # 新增7x7卷积
+            # 深度卷积分支
+            self.depth_conv = nn.Sequential(
+                nn.Conv1d(embed_dim, embed_dim, kernel_size=3, padding=1, groups=embed_dim),
+                nn.BatchNorm1d(embed_dim),
+                nn.SiLU(),
+                nn.Conv1d(embed_dim, 64, kernel_size=1),
+            )
+            self.conv_bn = nn.BatchNorm1d(64 * 5)  # 5个分支
+            self.conv_act = nn.SiLU()  # 使用SiLU激活
+            # 通道注意力
+            self.conv_se = SEBlock(64 * 5)        # 增强空间统计特征分支（可选）
         if use_spatial_stats:
             self.spatial_mlp = nn.Sequential(
-                nn.Linear(8, 16),
-                nn.ReLU(),
-                nn.Linear(16, 16),
-                nn.ReLU(),
+                nn.Linear(8, 32),
+                nn.SiLU(),
+                nn.Dropout(dropout),
+                nn.Linear(32, 24),  # 输出24维
+                nn.SiLU(),
                 nn.Dropout(dropout),
             )
         # AttentionPooling（可选）
         if use_attn_pool:
-            self.attn_pool = AttentionPooling(trans_dim)
-        # 融合后投影到Transformer输入维度
+            self.attn_pool = AttentionPooling(trans_dim)        # 融合后投影到Transformer输入维度
         in_dim = (
             embed_dim
             + (coord_dim if coord_dim > 0 else 0)
             + (embed_dim if use_bert else 0)
-            + 16
+            + 24  # brand_type_mlp输出维度增加到24
         )
         if use_multiscale_conv:
-            in_dim += 32 * 3
+            in_dim += 64 * 5  # 更新为5个分支，每个64维
         if use_spatial_stats:
-            in_dim += 16
+            in_dim += 24  # spatial_mlp输出维度增加到24
         self.input_proj = nn.Linear(in_dim, trans_dim)
         self.input_norm = nn.LayerNorm(trans_dim)  # 新增输入归一化
         # TransformerEncoder
@@ -255,19 +271,21 @@ class StorePredictionModel(nn.Module):
         # 全局注意力层
         self.global_attn = nn.MultiheadAttention(
             trans_dim, n_heads, dropout=dropout, batch_first=True
-        )
-        # MLP Head
+        )        # 增强MLP Head
         self.mlp = nn.Sequential(
+            nn.Linear(trans_dim, trans_dim),
+            nn.BatchNorm1d(trans_dim),
+            nn.SiLU(),
+            nn.Dropout(dropout),
             nn.Linear(trans_dim, trans_dim // 2),
             nn.BatchNorm1d(trans_dim // 2),
-            nn.SiLU(),  # GELU -> SiLU
+            nn.SiLU(),
             nn.Dropout(dropout),
             nn.Linear(trans_dim // 2, trans_dim // 4),
             nn.BatchNorm1d(trans_dim // 4),
-            nn.SiLU(),  # GELU -> SiLU
+            nn.SiLU(),
             nn.Dropout(dropout),
             nn.LayerNorm(trans_dim // 4),
-            nn.Dropout(dropout),
         )
         self.output_fc = nn.Linear(trans_dim // 4, num_classes)
         self.dropout_layer = nn.Dropout(dropout)
@@ -310,17 +328,19 @@ class StorePredictionModel(nn.Module):
     ):
         batch_size, seq_len = seq_ids.shape[:2]
         id_emb = self.id_embedding(seq_ids)  # (B, T, D)
-        features = [id_emb]
-        # 多尺度卷积特征（可选）
+        features = [id_emb]        # 增强多尺度卷积特征（可选）
         if self.use_multiscale_conv:
             id_emb_conv = id_emb.permute(0, 2, 1)  # (B, D, T)
             conv1 = self.conv1(id_emb_conv)
             conv3 = self.conv3(id_emb_conv)
             conv5 = self.conv5(id_emb_conv)
-            conv_feat = torch.cat([conv1, conv3, conv5], dim=1)  # (B, 32*3, T)
+            conv7 = self.conv7(id_emb_conv)  # 新增7x7卷积
+            depth_conv = self.depth_conv(id_emb_conv)  # 深度卷积
+            conv_feat = torch.cat([conv1, conv3, conv5, conv7, depth_conv], dim=1)  # (B, 64*5, T)
             conv_feat = self.conv_bn(conv_feat)
             conv_feat = self.conv_act(conv_feat)
-            conv_feat = conv_feat.permute(0, 2, 1)  # (B, T, 32*3)
+            conv_feat = self.conv_se(conv_feat.permute(0, 2, 1)).permute(0, 2, 1)  # 通道注意力
+            conv_feat = conv_feat.permute(0, 2, 1)  # (B, T, 64*5)
             features.append(conv_feat)
         if self.coord_embedding_layer is not None and seq_coords is not None:
             coords_flat = seq_coords.reshape(batch_size * seq_len, 2)
@@ -346,7 +366,7 @@ class StorePredictionModel(nn.Module):
             )
         if brand_type_ids is not None:
             brand_type_emb = self.brand_type_embedding(brand_type_ids)
-            brand_type_feat = self.brand_type_mlp(brand_type_emb)
+            brand_type_feat = self.brand_type_mlp(brand_type_emb)  # (B, 24)  更新输出维度
             brand_type_feat = brand_type_feat.unsqueeze(1).expand(-1, seq_len, -1)
             features.append(brand_type_feat)
         # 空间统计特征分支（可选）
@@ -366,7 +386,7 @@ class StorePredictionModel(nn.Module):
                 ],
                 dim=1,
             )  # (B, 8)
-            stat_feat = self.spatial_mlp(stat_feat)  # (B, 16)
+            stat_feat = self.spatial_mlp(stat_feat)  # (B, 24)  更新输出维度
             stat_feat = stat_feat.unsqueeze(1).expand(-1, seq_len, -1)
             features.append(stat_feat)
         x = torch.cat(features, dim=-1)
