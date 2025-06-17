@@ -201,6 +201,7 @@ class StorePredictionModel(nn.Module):
         *args, **kwargs
     ):
         super().__init__()
+        self.gnn_dim = gnn_dim
         self.num_classes = num_classes
         self.embed_dim = embed_dim
         self.coord_dim = coord_dim
@@ -236,11 +237,10 @@ class StorePredictionModel(nn.Module):
         # BERT（可选，默认关闭）
         if use_bert:
             try:
-                from transformers import BertModel, BertTokenizer
                 self.bert_model = BertModel.from_pretrained(bert_model_name)
                 self.bert_tokenizer = BertTokenizer.from_pretrained(bert_model_name)
                 for p in self.bert_model.parameters():
-                    p.requires_grad = False  # 冻结BERT参数
+                    p.requires_grad = True
             except:
                 print(f"警告: 无法加载BERT模型 {bert_model_name}，将禁用BERT特征")
                 self.use_bert = False
@@ -282,20 +282,33 @@ class StorePredictionModel(nn.Module):
         # 融合方式：主干分支加权平均（含GNN）
         n_fuse = 2 + int(self.use_gnn)
         self.fuse_weights = nn.Parameter(torch.ones(n_fuse))
-        # 输出层
-        self.mlp = nn.Sequential(
-            nn.Linear(self.rnn_dim, self.rnn_dim),
-            nn.LayerNorm(self.rnn_dim),
+        # 融合方式升级：concat+MLP，融合Transformer、GRU、GNN、BERT、brand_type等特征，提升表达能力
+        # bert_proj输出维度为embed_dim，brand_type_embedding为brand_type_embed_dim
+        concat_dim = self.trans_dim + self.rnn_dim + (self.gnn_dim if self.use_gnn else 0) + (self.embed_dim if self.use_bert else 0) + self.brand_type_embed_dim
+        self.fuse_mlp = nn.Sequential(
+            nn.Linear(concat_dim, concat_dim * 2),
+            nn.LayerNorm(concat_dim * 2),
             nn.SiLU(),
             nn.Dropout(dropout),
-            nn.Linear(self.rnn_dim, self.rnn_dim // 2),
-            nn.LayerNorm(self.rnn_dim // 2),
+            nn.Linear(concat_dim * 2, concat_dim),
+            nn.LayerNorm(concat_dim),
             nn.SiLU(),
             nn.Dropout(dropout),
         )
-        self.output_fc = nn.Linear(self.rnn_dim // 2, num_classes)
+        # 输出层
+        self.mlp = nn.Sequential(
+            nn.Linear(concat_dim, concat_dim),
+            nn.LayerNorm(concat_dim),
+            nn.SiLU(),
+            nn.Dropout(dropout),
+            nn.Linear(concat_dim, concat_dim // 2),
+            nn.LayerNorm(concat_dim // 2),
+            nn.SiLU(),
+            nn.Dropout(dropout),
+        )
+        self.output_fc = nn.Linear(concat_dim // 2, num_classes)
         self.dropout_layer = nn.Dropout(dropout)
-        self.se_block = SEBlock(self.rnn_dim)
+        self.se_block = SEBlock(concat_dim)  # 修正为concat_dim
         self.feature_dropblock = FeatureDropBlock(drop_prob=0.15)
         # BERT分支更好利用：解冻后半层参数
         if self.use_bert:
@@ -390,18 +403,27 @@ class StorePredictionModel(nn.Module):
                 x_gnn_in = gnn_block(x_gnn_in, edge_index)
             x_gnn = x_gnn_in.view(x.shape[0], x.shape[1], -1)
             x_gnn = self.gnn_norm(x_gnn)
-        # 融合（主干分支加权平均，含GNN）
-        fuse_list = [x_trans, x_rnn]
+        # 融合（concat+MLP，含GNN/BERT/brand_type）
+        concat_list = [
+            x_trans[:, 0, :] if x_trans.dim() == 3 else x_trans,
+            x_rnn[:, 0, :] if x_rnn.dim() == 3 else x_rnn
+        ]
         if self.use_gnn and x_gnn is not None:
-            fuse_list.append(x_gnn)
-        fuse_weights = torch.softmax(self.fuse_weights[:len(fuse_list)], dim=0)
-        x_fused = sum(w * f for w, f in zip(fuse_weights, fuse_list))
-        # 池化
-        if isinstance(x_fused, torch.Tensor) and x_fused.dim() == 3:
-            last_out = x_fused[:, 0, :]
-        else:
-            last_out = x_fused
-        last_out = self.se_block(last_out)
+            concat_list.append(x_gnn[:, 0, :] if x_gnn.dim() == 3 else x_gnn)
+        # BERT特征（池化后）
+        if bert_features is not None:
+            concat_list.append(bert_features[:, 0, :] if bert_features.dim() == 3 else bert_features)
+        # brand_type特征（池化后）
+        if brand_type_ids is not None:
+            brand_type_emb = self.brand_type_embedding(brand_type_ids)
+            concat_list.append(brand_type_emb)
+        x_fused = torch.cat(concat_list, dim=-1)
+        # 融合后MLP
+        x_fused = nn.LayerNorm(x_fused.shape[-1]).to(x_fused.device)(x_fused)
+        x_fused = self.dropout_layer(x_fused)
+        x_fused = self.fuse_mlp(x_fused)
+        # ...后续不变...
+        last_out = self.se_block(x_fused)
         last_out = nn.LayerNorm(last_out.shape[-1]).to(last_out.device)(last_out)
         last_out = self.dropout_layer(last_out)
         # Mixup
