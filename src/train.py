@@ -14,7 +14,7 @@ from torch.optim.lr_scheduler import LambdaLR
 import random
 
 plt.rcParams['font.family'] = 'Noto Sans SC'
-DEFAULT_EMBED_DIM = 48  # 适当提升表达力
+DEFAULT_EMBED_DIM = 60  # 适当提升表达力
 DEFAULT_COORD_DIM = 6   # 降低坐标嵌入维度
 DEFAULT_HIDDEN_DIM = 32
 DEFAULT_LSTM_LAYERS = 8
@@ -22,14 +22,14 @@ DEFAULT_DROPOUT = 0.2  # 降低Dropout
 DEFAULT_LR = 1e-3  # 提高学习率
 DEFAULT_WEIGHT_DECAY = 1e-4  # 极致提升权重衰减
 DEFAULT_EPOCHS = 300  # 增加训练轮数
-DEFAULT_TRANS_DIM = 48  # 降低Transformer维度
+DEFAULT_TRANS_DIM = 32  # 降低Transformer维度
 DEFAULT_N_LAYERS = 2    # 降低层数
 DEFAULT_N_HEADS = 4     # 降低头数
 DEFAULT_MLP_RATIO = 2.0  # 降低MLP扩展比
-DEFAULT_DROP_PATH = 0.1 # 降低DropPath
+DEFAULT_DROP_PATH = 0.15 # 降低DropPath
 DEFAULT_BATCH_SIZE = 144
 DEFAULT_OPTIMIZER = 'adamw'
-DEFAULT_PATIENCE = 5  # 极致收紧early stop
+DEFAULT_PATIENCE = 10  # 极致收紧early stop
 
 class StochasticDepthScheduler:
     """训练过程中动态调整DropPath概率，提升泛化能力"""
