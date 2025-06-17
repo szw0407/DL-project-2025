@@ -154,23 +154,28 @@ class StorePredictionModel(nn.Module):
     def __init__(
         self,
         num_classes,
-        embed_dim=16,      # 简化：嵌入维度减小
-        coord_dim=4,       # 简化：坐标维度减小
-        trans_dim=16,      # 简化：主干维度减小
-        n_layers=1,        # 简化：仅1层Transformer
-        n_heads=2,         # 简化：2头注意力
-        dropout=0.1,       # 简化：更小dropout
+        embed_dim=16,
+        coord_dim=4,
+        trans_dim=16,
+        n_layers=1,
+        n_heads=2,
+        dropout=0.1,
         bert_model_name="bert-base-chinese",
         use_bert=True,
         bert_feature_dim=768,
-        mlp_ratio=1.5,     # 简化：MLP扩展比例减小
-        drop_path=0.05,    # 简化：更小drop_path
-        brand_type_num=16, # 简化：品牌类型embedding更小
+        mlp_ratio=1.5,
+        drop_path=0.05,
+        brand_type_num=16,
         brand_type_embed_dim=4,
         brand_type_to_id=None,
-        use_multiscale_conv=False,  # 关闭多尺度卷积
-        use_spatial_stats=False,    # 关闭空间统计特征
-        use_attn_pool=False,        # 关闭AttentionPooling
+        use_multiscale_conv=False,
+        use_spatial_stats=False,
+        use_attn_pool=False,
+        gnn_dim=32,           # 新增: GNN输出维度
+        gnn_layers=1,         # 新增: GNN层数
+        gnn_heads=2,          # 新增: GAT头数
+        gnn_dropout=0.1,      # 新增: GNN dropout
+        gnn_fuse="cat",      # 新增: GNN与Transformer融合方式: cat/mean/sum
         *args, **kwargs
     ):
         super().__init__()
@@ -186,6 +191,11 @@ class StorePredictionModel(nn.Module):
         self.use_multiscale_conv = use_multiscale_conv
         self.use_spatial_stats = use_spatial_stats
         self.use_attn_pool = use_attn_pool
+        self.gnn_dim = gnn_dim
+        self.gnn_layers = gnn_layers
+        self.gnn_heads = gnn_heads
+        self.gnn_dropout = gnn_dropout
+        self.gnn_fuse = gnn_fuse
         # Embedding
         self.id_embedding = nn.Embedding(num_classes, embed_dim)
         if coord_dim > 0:
@@ -227,12 +237,33 @@ class StorePredictionModel(nn.Module):
                 nn.ReLU(),
                 nn.Dropout(dropout),
             )
+        # GNN分支
+        self.use_gnn = HAS_PYG
+        if self.use_gnn:
+            gnn_blocks = []
+            gnn_in = (
+                embed_dim
+                + (coord_dim if coord_dim > 0 else 0)
+                + (embed_dim if use_bert else 0)
+                + 4
+            )
+            for i in range(gnn_layers):
+                gnn_blocks.append(SimpleGNNBlock(gnn_in if i == 0 else gnn_dim, gnn_dim, heads=gnn_heads, dropout=gnn_dropout))
+            self.gnn_blocks = nn.ModuleList(gnn_blocks)
+        # 融合后输入维度
         in_dim = (
             embed_dim
             + (coord_dim if coord_dim > 0 else 0)
             + (embed_dim if use_bert else 0)
-            + 4  # brand_type_mlp输出维度减小
+            + 4
         )
+        if self.use_gnn:
+            if gnn_fuse == "cat":
+                self.fused_dim = trans_dim + gnn_dim
+            else:
+                self.fused_dim = trans_dim  # mean/sum
+        else:
+            self.fused_dim = trans_dim
         self.input_proj = nn.Linear(in_dim, trans_dim)
         self.input_norm = nn.LayerNorm(trans_dim)  # 新增输入归一化
         # TransformerEncoder
@@ -248,18 +279,18 @@ class StorePredictionModel(nn.Module):
             trans_dim, n_heads, dropout=dropout, batch_first=True
         )        # 增强MLP Head
         self.mlp = nn.Sequential(
-            nn.Linear(trans_dim, trans_dim),
-            nn.LayerNorm(trans_dim),
+            nn.Linear(self.fused_dim, self.fused_dim),
+            nn.LayerNorm(self.fused_dim),
             nn.SiLU(),
             nn.Dropout(dropout),
-            nn.Linear(trans_dim, trans_dim // 2),
-            nn.LayerNorm(trans_dim // 2),
+            nn.Linear(self.fused_dim, self.fused_dim // 2),
+            nn.LayerNorm(self.fused_dim // 2),
             nn.SiLU(),
             nn.Dropout(dropout),
         )
-        self.output_fc = nn.Linear(trans_dim // 2, num_classes)
+        self.output_fc = nn.Linear(self.fused_dim // 2, num_classes)
         self.dropout_layer = nn.Dropout(dropout)
-        self.se_block = SEBlock(trans_dim)
+        self.se_block = SEBlock(self.fused_dim)
         self.feature_dropblock = FeatureDropBlock(drop_prob=0.1)
 
     def extract_bert_features(self, brand_names, brand_types, seq_len):
@@ -298,15 +329,16 @@ class StorePredictionModel(nn.Module):
         contrastive=False,
         contrastive_pairs=None,
         contrastive_temperature=0.5,
+        edge_index=None,  # 新增: GNN需要的edge_index
     ):
         batch_size, seq_len = seq_ids.shape[:2]
         id_emb = self.id_embedding(seq_ids)  # (B, T, D)
-        # 已禁用多尺度卷积、空间统计、AttnPooling等复杂分支，相关forward分支直接跳过
         features = [id_emb]
         if self.coord_embedding_layer is not None and seq_coords is not None:
             coords_flat = seq_coords.reshape(batch_size * seq_len, 2)
             coord_emb_flat = self.coord_embedding_layer(coords_flat)
-            coord_emb_flat = self.coord_bn(coord_emb_flat)  # 这里的 coord_bn 也建议换成 LayerNorm
+            # LayerNorm替换BN，提升小数据泛化
+            coord_emb_flat = nn.LayerNorm(self.coord_dim).to(coord_emb_flat.device)(coord_emb_flat)
             coord_emb_activated = torch.tanh(coord_emb_flat)
             coord_emb = coord_emb_activated.view(batch_size, seq_len, self.coord_dim)
             features.append(coord_emb)
@@ -330,14 +362,41 @@ class StorePredictionModel(nn.Module):
             brand_type_feat = self.brand_type_mlp(brand_type_emb)
             brand_type_feat = brand_type_feat.unsqueeze(1).expand(-1, seq_len, -1)
             features.append(brand_type_feat)
-        x = torch.cat(features, dim=-1)
-        x = self.input_proj(x)
-        x = self.input_norm(x)
-        x = self.feature_dropblock(x)
-        x = self.transformer(x)
-        x = self.norm(x)
-        # 直接取第一个token的输出或均值池化
-        last_out = x[:, 0, :] if x.dim() == 3 else x
+        x = torch.cat(features, dim=-1)  # (B, T, F)
+        x_proj = self.input_proj(x)
+        x_proj = self.input_norm(x_proj)
+        x_proj = self.feature_dropblock(x_proj)
+        # Transformer分支
+        x_trans = self.transformer(x_proj)
+        x_trans = self.norm(x_trans)
+        # GNN分支
+        if self.use_gnn:
+            # GNN输入: (B, T, F) -> (B*T, F)
+            x_gnn_in = x.reshape(batch_size * seq_len, -1)
+            if edge_index is None:
+                # 默认构造全连接图（适合小数据/短序列）
+                idx = torch.arange(seq_len, device=x.device)
+                edge_index = torch.combinations(idx, r=2).T
+                edge_index = torch.cat([edge_index, edge_index.flip(0)], dim=1)  # 双向
+            edge_index = edge_index.to(x.device)
+            x_gnn = x_gnn_in
+            for gnn_block in self.gnn_blocks:
+                x_gnn = gnn_block(x_gnn, edge_index)
+            x_gnn = x_gnn.view(batch_size, seq_len, self.gnn_dim)
+        # 融合
+        if self.use_gnn:
+            if self.gnn_fuse == "cat":
+                x_fused = torch.cat([x_trans, x_gnn], dim=-1)
+            elif self.gnn_fuse == "mean":
+                x_fused = (x_trans + x_gnn) / 2
+            elif self.gnn_fuse == "sum":
+                x_fused = x_trans + x_gnn
+            else:
+                x_fused = x_trans
+        else:
+            x_fused = x_trans
+        # 池化
+        last_out = x_fused[:, 0, :] if x_fused.dim() == 3 else x_fused
         last_out = self.se_block(last_out)
         last_out = self.dropout_layer(last_out)
         # Mixup（可选）
@@ -350,10 +409,8 @@ class StorePredictionModel(nn.Module):
         # 对比学习分支
         contrastive_loss = None
         if contrastive and contrastive_pairs is not None:
-            # contrastive_pairs: [(seq_ids1, seq_ids2, ...)]
             z_i_list, z_j_list = [], []
             for (seq1, seq2) in contrastive_pairs:
-                # 只用id嵌入和主干特征，或可自定义
                 out1 = self.forward(seq1, seq_coords=None, brand_names=None, brand_types=None, contrastive=False)
                 out2 = self.forward(seq2, seq_coords=None, brand_names=None, brand_types=None, contrastive=False)
                 z_i_list.append(out1)
@@ -361,9 +418,39 @@ class StorePredictionModel(nn.Module):
             z_i = torch.cat(z_i_list, dim=0)
             z_j = torch.cat(z_j_list, dim=0)
             contrastive_loss = nt_xent_loss(z_i, z_j, temperature=contrastive_temperature)
-        # logits = torch.softmax(logits, dim=-1)  # 如为分类任务可解注释
         if mixup and targets is not None:
             return logits, y_a, y_b, lam, contrastive_loss
         if contrastive:
             return logits, contrastive_loss
         return logits
+
+
+# ===== GNN模块（GCN/GAT） =====
+from torch_geometric.nn import GCNConv, GATConv
+HAS_PYG = True
+class SimpleGNNBlock(nn.Module):
+    """简单的GCN+GAT混合GNN块，适合小数据特征提取"""
+    def __init__(self, in_dim, out_dim, use_gat=True, heads=2, dropout=0.1):
+        super().__init__()
+        self.use_gat = use_gat and HAS_PYG
+        if HAS_PYG:
+            self.gcn = GCNConv(in_dim, out_dim)
+            if self.use_gat:
+                self.gat = GATConv(out_dim, out_dim, heads=heads, dropout=dropout, concat=False)
+        else:
+            self.gcn = nn.Linear(in_dim, out_dim)
+            self.gat = nn.Identity()
+        self.norm = nn.LayerNorm(out_dim)
+        self.act = nn.SiLU()
+        self.dropout = nn.Dropout(dropout)
+    def forward(self, x, edge_index):
+        # x: (N, F), edge_index: (2, E)
+        x = self.gcn(x, edge_index) if HAS_PYG else self.gcn(x)
+        x = self.norm(x)
+        x = self.act(x)
+        if self.use_gat and HAS_PYG:
+            x = self.gat(x, edge_index)
+            x = self.norm(x)
+            x = self.act(x)
+        x = self.dropout(x)
+        return x
