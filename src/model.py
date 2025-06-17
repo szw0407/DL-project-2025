@@ -267,16 +267,17 @@ class StorePredictionModel(nn.Module):
         )
         # GRU分支
         self.rnn_dim = trans_dim
+        # 修正：GRU输入应为多尺度卷积输出的维度（trans_dim），而非原始in_dim
         self.rnn = nn.GRU(
-            in_dim, self.rnn_dim // 2, num_layers=1, batch_first=True, bidirectional=True
+            trans_dim, self.rnn_dim // 2, num_layers=1, batch_first=True, bidirectional=True
         )
         self.rnn_norm = nn.LayerNorm(self.rnn_dim)
         # GNN模块
         if self.use_gnn:
             gnn_blocks = []
-            gnn_in = embed_dim + (coord_dim if coord_dim > 0 else 0) + (embed_dim if use_bert else 0) + 4
+            # 修正：GNN分支输入应为trans_dim
             for i in range(gnn_layers):
-                gnn_blocks.append(SimpleGNNBlock(gnn_in if i == 0 else gnn_dim, gnn_dim, heads=gnn_heads, dropout=gnn_dropout))
+                gnn_blocks.append(SimpleGNNBlock(trans_dim if i == 0 else gnn_dim, gnn_dim, heads=gnn_heads, dropout=gnn_dropout))
             self.gnn_blocks = nn.ModuleList(gnn_blocks)
             self.gnn_norm = nn.LayerNorm(gnn_dim)
         # 融合方式：主干分支加权平均（含GNN）
@@ -284,7 +285,7 @@ class StorePredictionModel(nn.Module):
         self.fuse_weights = nn.Parameter(torch.ones(n_fuse))
         # 融合方式升级：concat+MLP，融合Transformer、GRU、GNN、BERT、brand_type等特征，提升表达能力
         # bert_proj输出维度为embed_dim，brand_type_embedding为brand_type_embed_dim
-        concat_dim = self.trans_dim + self.rnn_dim + (self.gnn_dim if self.use_gnn else 0) + (self.embed_dim if self.use_bert else 0) + self.brand_type_embed_dim
+        concat_dim = trans_dim + trans_dim + (gnn_dim if use_gnn else 0) + (embed_dim if use_bert else 0) + brand_type_embed_dim
         self.fuse_mlp = nn.Sequential(
             nn.Linear(concat_dim, concat_dim * 2),
             nn.LayerNorm(concat_dim * 2),
@@ -317,6 +318,33 @@ class StorePredictionModel(nn.Module):
                 if i >= len(bert_layers) // 2:
                     for p in layer.parameters():
                         p.requires_grad = True
+        # 移除全局池化Attention层
+        # self.global_attn = nn.MultiheadAttention(concat_dim, n_heads, dropout=dropout, batch_first=True)
+        # 增加DropBlock到融合特征
+        self.fuse_dropblock = FeatureDropBlock(drop_prob=0.15)
+        # 增加随机特征置零（stochastic feature zeroing）
+        self.fuse_feature_zero_prob = 0.1
+
+        # 多尺度1D卷积特征提取（专注序列信息）
+        self.conv_kernels = [1, 3, 5]
+        conv_in_dim = embed_dim + (coord_dim if coord_dim > 0 else 0) + (embed_dim if use_bert else 0) + 4
+        self.seq_convs = nn.ModuleList([
+            nn.Sequential(
+                nn.Conv1d(conv_in_dim, trans_dim, kernel_size=k, padding=k//2),
+                nn.BatchNorm1d(trans_dim),
+                nn.SiLU()
+            ) for k in self.conv_kernels
+        ])
+        self.seq_conv_rescale = nn.Linear(len(self.conv_kernels) * trans_dim, trans_dim)
+
+    def add_bert_input_noise(self, input_ids, noise_prob=0.08):
+        # 随机将部分token替换为[MASK]，以增强泛化
+        if self.training and noise_prob > 0:
+            mask_token_id = self.bert_tokenizer.mask_token_id
+            rand_mask = (torch.rand_like(input_ids.float()) < noise_prob)
+            input_ids = input_ids.clone()
+            input_ids[rand_mask] = mask_token_id
+        return input_ids
 
     def extract_bert_features(self, brand_names, brand_types, seq_len):
         if not self.use_bert:
@@ -333,10 +361,12 @@ class StorePredictionModel(nn.Module):
             )
             input_ids = encoded["input_ids"].to(device)
             attention_mask = encoded["attention_mask"].to(device)
-            bert_outputs = self.bert_model(
-                input_ids=input_ids, attention_mask=attention_mask
-            )
-            bert_features = bert_outputs.last_hidden_state[:, 0, :]
+        # 在输入层加噪声
+        input_ids = self.add_bert_input_noise(input_ids, noise_prob=0.08)
+        bert_outputs = self.bert_model(
+            input_ids=input_ids, attention_mask=attention_mask
+        )
+        bert_features = bert_outputs.last_hidden_state[:, 0, :]
         bert_proj = self.bert_proj(bert_features)
         bert_seq_features = bert_proj.unsqueeze(1).expand(-1, seq_len, -1)
         return bert_seq_features
@@ -385,8 +415,15 @@ class StorePredictionModel(nn.Module):
             features.append(brand_type_feat)
         # ...特征拼接...
         x = torch.cat(features, dim=-1)  # (B, T, F)
-        x_proj = self.input_proj(x)
-        x_proj = self.input_norm(x_proj)
+        # 多尺度卷积特征提取
+        x_conv_in = x.permute(0, 2, 1)  # (B, F, T)
+        conv_outs = [conv(x_conv_in) for conv in self.seq_convs]
+        x_conv = torch.cat(conv_outs, dim=1)  # (B, C*k, T)
+        x_conv = x_conv.permute(0, 2, 1)  # (B, T, C*k)
+        x_conv = self.seq_conv_rescale(x_conv)
+        # 残差连接
+        x = x_conv + self.input_proj(x)
+        x_proj = self.input_norm(x)
         x_proj = self.feature_dropblock(x_proj)
         # Transformer分支
         x_trans = self.transformer(x_proj)
@@ -398,10 +435,11 @@ class StorePredictionModel(nn.Module):
         # GNN分支
         x_gnn = None
         if self.use_gnn and edge_index is not None:
-            x_gnn_in = x.reshape(-1, x.shape[-1])
+            # 修正：GNN分支输入应为x_proj，维度为trans_dim
+            x_gnn_in = x_proj.reshape(-1, x_proj.shape[-1])
             for gnn_block in self.gnn_blocks:
                 x_gnn_in = gnn_block(x_gnn_in, edge_index)
-            x_gnn = x_gnn_in.view(x.shape[0], x.shape[1], -1)
+            x_gnn = x_gnn_in.view(x_proj.shape[0], x_proj.shape[1], -1)
             x_gnn = self.gnn_norm(x_gnn)
         # 融合（concat+MLP，含GNN/BERT/brand_type）
         concat_list = [
@@ -410,19 +448,21 @@ class StorePredictionModel(nn.Module):
         ]
         if self.use_gnn and x_gnn is not None:
             concat_list.append(x_gnn[:, 0, :] if x_gnn.dim() == 3 else x_gnn)
-        # BERT特征（池化后）
         if bert_features is not None:
             concat_list.append(bert_features[:, 0, :] if bert_features.dim() == 3 else bert_features)
-        # brand_type特征（池化后）
         if brand_type_ids is not None:
             brand_type_emb = self.brand_type_embedding(brand_type_ids)
             concat_list.append(brand_type_emb)
+        # ...特征融合...
         x_fused = torch.cat(concat_list, dim=-1)
+        # 融合特征加DropBlock
+        x_fused = self.fuse_dropblock(x_fused)
+        # 融合特征随机置零部分通道
+        if self.training and self.fuse_feature_zero_prob > 0:
+            mask = (torch.rand_like(x_fused) > self.fuse_feature_zero_prob).float()
+            x_fused = x_fused * mask
         # 融合后MLP
-        x_fused = nn.LayerNorm(x_fused.shape[-1]).to(x_fused.device)(x_fused)
-        x_fused = self.dropout_layer(x_fused)
         x_fused = self.fuse_mlp(x_fused)
-        # ...后续不变...
         last_out = self.se_block(x_fused)
         last_out = nn.LayerNorm(last_out.shape[-1]).to(last_out.device)(last_out)
         last_out = self.dropout_layer(last_out)

@@ -35,7 +35,7 @@ DEFAULT_CONTRASTIVE_TEMPERATURE = 0.5
 DEFAULT_USE_SPATIAL_STATS = True
 
 class StochasticDepthScheduler:
-    """训练过程中动态调整DropPath概率，提升泛化能力"""
+    """训练过程中动态调整DropPath概率，提升泛化能力（方案2）"""
     def __init__(self, model, max_drop_path=0.3, min_drop_path=0.05, total_epochs=100):
         self.model = model
         self.max_drop_path = max_drop_path
@@ -121,6 +121,7 @@ def get_warmup_scheduler(optimizer, warmup_steps, total_steps):
     return LambdaLR(optimizer, lr_lambda)
 
 def get_loss_fn(num_classes, smoothing=0.1, use_contrastive=False):
+    # 方案1：标签平滑
     if use_contrastive:
         def loss_fn(outputs, targets, contrastive_loss=None, contrastive_weight=0.1):
             ce_loss = nn.CrossEntropyLoss(label_smoothing=smoothing)(outputs, targets)
@@ -251,9 +252,8 @@ def train_model(
     # 定义损失函数和优化器
     criterion = get_loss_fn(num_total_classes, smoothing=0.1, use_contrastive=use_contrastive)
     optimizer = get_optimizer(model, lr, weight_decay, optimizer_type)
-    total_steps = epochs * max(1, len(train_samples) // batch_size)
-    warmup_steps = int(0.1 * total_steps)
-    warmup_scheduler = get_warmup_scheduler(optimizer, warmup_steps, total_steps)
+    # 自适应学习率调度器
+    lr_scheduler = AdaptiveLRScheduler(optimizer, factor=0.5, patience=5, min_lr=1e-6)
     
     early_stopper = EarlyStopping(patience=patience)
       # 定义早停相关变量
@@ -261,9 +261,6 @@ def train_model(
     best_model_state = None
     best_epoch = 0
     best_score = -float('inf')
-    
-    # 自适应学习率调度器
-    lr_scheduler = AdaptiveLRScheduler(optimizer, factor=0.5, patience=5, min_lr=1e-6)
     
     # 用于记录训练过程的指标
     train_losses = []
@@ -274,8 +271,9 @@ def train_model(
     
     # 训练循环    
     print("\n=== 开始训练 ===")
+    drop_path_scheduler = StochasticDepthScheduler(model, max_drop_path=drop_path, min_drop_path=0.05, total_epochs=epochs)
     for epoch in range(epochs):
-        # 动态调整DropPath
+        # 动态调整DropPath（方案2）
         drop_path_scheduler.step(epoch)
         # 训练模式
         model.train()
@@ -374,7 +372,6 @@ def train_model(
             if grad_clip is not None:
                 torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
             optimizer.step()
-            warmup_scheduler.step()
             
             current_loss = loss.item()
             total_loss += current_loss
@@ -458,7 +455,6 @@ def train_model(
             best_model_state = model.state_dict().copy()
             best_epoch = epoch
             patience_counter = 0
-            # 保存时直接保存整个模型
             if model_save_path:
                 save_model_state(model, model_save_path)
         else:
@@ -466,6 +462,9 @@ def train_model(
             if patience_counter >= patience:
                 print(f"早停触发: {patience}轮未改善")
                 break
+        # 每轮都用当前最优模型参数做lr_scheduler.step
+        lr_scheduler.scheduler.optimizer.load_state_dict(optimizer.state_dict())
+        lr_scheduler.step(best_score)
     # 训练循环后，早停判断
     early_stopper(val_mrr, model)
     lr_scheduler.step(val_mrr)
