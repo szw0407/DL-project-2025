@@ -11,11 +11,7 @@ from data_preprocessing import load_data
 from model import StorePredictionModel
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import LambdaLR
-
-# try:
-from torch_optimizer import Lookahead
-LOOKAHEAD_AVAILABLE = True
-
+import random
 
 plt.rcParams['font.family'] = 'Noto Sans SC'
 DEFAULT_EMBED_DIM = 48  # 适当提升表达力
@@ -85,7 +81,7 @@ class AdaptiveLRScheduler:
 
 def augment_sequence(seq_ids, seq_coords, mask_prob=0.15, do_flip=True, do_rotate=True):
     """对序列和坐标进行mask、翻转、旋转等增强"""
-    import random
+    
     # mask部分id
     seq_ids_aug = seq_ids.copy()
     for i in range(len(seq_ids_aug)):
@@ -110,9 +106,6 @@ def augment_sequence(seq_ids, seq_coords, mask_prob=0.15, do_flip=True, do_rotat
 
 def get_optimizer(model, lr, weight_decay, optimizer_type='adamw'):
     base_opt = AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
-    if optimizer_type == 'lookahead' and LOOKAHEAD_AVAILABLE:
-        print('[优化器] 使用Lookahead+AdamW')
-        return Lookahead(base_opt)
     if optimizer_type == 'adamw':
         print('[优化器] 使用AdamW')
     return base_opt
@@ -157,7 +150,6 @@ def train_model(
     """
     训练门店选址预测模型。
 
-    参数:
         train_samples: 训练样本列表，每个样本为 (prefix_idx, prefix_coords, target_idx)
         val_samples: 验证样本列表
         num_total_classes: 网格类别总数
@@ -246,10 +238,6 @@ def train_model(
     
     early_stopper = EarlyStopping(patience=patience)
       # 定义早停相关变量
-    best_val_mrr = -1
-    best_val_acc1 = -1
-    best_val_acc5 = -1
-    best_val_acc10 = -1
     patience_counter = 0
     best_model_state = None
     best_epoch = 0
@@ -563,7 +551,7 @@ if __name__ == "__main__":
     print(f"品牌总数: {len(brand_type_map)}")
 
     # 数据增强扩展训练集
-    aug_times = 6  # 每个样本增强4次
+    aug_times = 4
     augmented = []
     for sample in train_samples:
         seq_ids, seq_coords, target_idx, brand_name, brand_type = sample
