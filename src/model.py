@@ -171,6 +171,7 @@ class StorePredictionModel(nn.Module):
         use_multiscale_conv=False,  # 关闭多尺度卷积
         use_spatial_stats=False,    # 关闭空间统计特征
         use_attn_pool=False,        # 关闭AttentionPooling
+        *args, **kwargs
     ):
         super().__init__()
         self.num_classes = num_classes
@@ -216,13 +217,13 @@ class StorePredictionModel(nn.Module):
         if self.use_bert:
             self.bert_proj = nn.Sequential(
                 nn.Linear(self.bert_feature_dim, embed_dim * 2),
-                nn.BatchNorm1d(embed_dim * 2),
+                nn.LayerNorm(embed_dim * 2),
                 nn.SiLU(),
                 nn.Linear(embed_dim * 2, embed_dim),
-                nn.BatchNorm1d(embed_dim),
+                nn.LayerNorm(embed_dim),
                 nn.ReLU(),
                 nn.Linear(embed_dim, embed_dim),
-                nn.BatchNorm1d(embed_dim),
+                nn.LayerNorm(embed_dim),
                 nn.ReLU(),
                 nn.Dropout(dropout),
             )
@@ -248,11 +249,11 @@ class StorePredictionModel(nn.Module):
         )        # 增强MLP Head
         self.mlp = nn.Sequential(
             nn.Linear(trans_dim, trans_dim),
-            nn.BatchNorm1d(trans_dim),
+            nn.LayerNorm(trans_dim),
             nn.SiLU(),
             nn.Dropout(dropout),
             nn.Linear(trans_dim, trans_dim // 2),
-            nn.BatchNorm1d(trans_dim // 2),
+            nn.LayerNorm(trans_dim // 2),
             nn.SiLU(),
             nn.Dropout(dropout),
         )
@@ -305,7 +306,7 @@ class StorePredictionModel(nn.Module):
         if self.coord_embedding_layer is not None and seq_coords is not None:
             coords_flat = seq_coords.reshape(batch_size * seq_len, 2)
             coord_emb_flat = self.coord_embedding_layer(coords_flat)
-            coord_emb_flat = self.coord_bn(coord_emb_flat)
+            coord_emb_flat = self.coord_bn(coord_emb_flat)  # 这里的 coord_bn 也建议换成 LayerNorm
             coord_emb_activated = torch.tanh(coord_emb_flat)
             coord_emb = coord_emb_activated.view(batch_size, seq_len, self.coord_dim)
             features.append(coord_emb)

@@ -1,4 +1,3 @@
-
 import torch
 import torch.nn as nn
 import numpy as np
@@ -13,25 +12,26 @@ from torch.optim.lr_scheduler import LambdaLR
 import random
 
 plt.rcParams['font.family'] = 'Noto Sans SC'
-DEFAULT_EMBED_DIM = 64  # 提升嵌入维度以增强表达力
-DEFAULT_COORD_DIM = 12   # 提升坐标嵌入维度
+DEFAULT_EMBED_DIM = 16
+DEFAULT_COORD_DIM = 4
 DEFAULT_HIDDEN_DIM = 64  # 提升隐藏层维度
 DEFAULT_LSTM_LAYERS = 8
-DEFAULT_DROPOUT = 0.3  # 适当降低Dropout
+DEFAULT_DROPOUT = 0.2  # 适当降低Dropout比例以适应更大的模型
 DEFAULT_LR = 8e-4  # 适当降低学习率，适应更大的模型
 DEFAULT_WEIGHT_DECAY = 1e-4  
 DEFAULT_EPOCHS = 300  
-DEFAULT_TRANS_DIM = 64  # 提升Transformer维度
-DEFAULT_N_LAYERS = 4    # 增加层数以提升特征学习能力
-DEFAULT_N_HEADS = 8     # 增加注意力头数
+DEFAULT_TRANS_DIM = 32
+DEFAULT_N_LAYERS = 1    # 增加层数以提升特征学习能力
+DEFAULT_N_HEADS = 2     # 增加注意力头数
 DEFAULT_MLP_RATIO = 4.0  # 增加MLP扩展比
-DEFAULT_DROP_PATH = 0.3 # 适当降低DropPath
-DEFAULT_BATCH_SIZE = 48  # 适当降低batch size以适应更大的模型
+DEFAULT_DROP_PATH = 0.1 # 适当降低DropPath
+DEFAULT_BATCH_SIZE = 32  # 适当降低batch size以适应更大的模型
 DEFAULT_OPTIMIZER = 'adamw'
 DEFAULT_PATIENCE = 15  # 增加patience，给更深模型更多训练时间
 DEFAULT_CONTRASTIVE = True
 DEFAULT_CONTRASTIVE_WEIGHT = 0.1
 DEFAULT_CONTRASTIVE_TEMPERATURE = 0.5
+DEFAULT_USE_SPATIAL_STATS = True
 
 class StochasticDepthScheduler:
     """训练过程中动态调整DropPath概率，提升泛化能力"""
@@ -141,7 +141,7 @@ def train_model(
     n_layers=DEFAULT_N_LAYERS,
     n_heads=DEFAULT_N_HEADS,
     dropout=DEFAULT_DROPOUT,
-    mlp_ratio=DEFAULT_MLP_RATIO,
+    mlp_ratio=1.5,
     drop_path=DEFAULT_DROP_PATH,
     lr=DEFAULT_LR,
     weight_decay=DEFAULT_WEIGHT_DECAY,
@@ -151,7 +151,7 @@ def train_model(
     model_save_path=None,
     use_bert=True,
     use_mixup=True,
-    mixup_alpha=0.4,  # 极致提升mixup扰动
+    mixup_alpha=0.4,
     grad_clip=2.0,
     batch_size=DEFAULT_BATCH_SIZE,
     optimizer_type=DEFAULT_OPTIMIZER,
@@ -159,7 +159,8 @@ def train_model(
     use_contrastive=DEFAULT_CONTRASTIVE,
     contrastive_weight=DEFAULT_CONTRASTIVE_WEIGHT,
     contrastive_temperature=DEFAULT_CONTRASTIVE_TEMPERATURE,
-    contrastive_pair_func=None
+    contrastive_pair_func=None,
+    use_spatial_stats=DEFAULT_USE_SPATIAL_STATS,
 ):
     """
     训练门店选址预测模型。
@@ -229,15 +230,17 @@ def train_model(
         num_classes=num_total_classes, 
         embed_dim=embed_dim, 
         coord_dim=coord_dim_config, 
+        gnn_dim=32,
+        gnn_layers=2,
         trans_dim=trans_dim,
         n_layers=n_layers,
         n_heads=n_heads,
         dropout=dropout,
-        mlp_ratio=mlp_ratio,
         drop_path=drop_path,
         use_bert=use_bert,
         brand_type_num=brand_type_num,
-        brand_type_embed_dim=8
+        brand_type_embed_dim=8,
+        use_spatial_stats=use_spatial_stats
     )
     model = model.to(device)
     # 特色功能1：动态DropPath调度器
@@ -249,7 +252,6 @@ def train_model(
     total_steps = epochs * max(1, len(train_samples) // batch_size)
     warmup_steps = int(0.1 * total_steps)
     warmup_scheduler = get_warmup_scheduler(optimizer, warmup_steps, total_steps)
-    cosine_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs, eta_min=1e-6)
     
     early_stopper = EarlyStopping(patience=patience)
       # 定义早停相关变量
@@ -268,7 +270,8 @@ def train_model(
     val_acc5s = []
     val_acc10s = []
     
-    # 训练循环    print("\n=== 开始训练 ===")
+    # 训练循环    
+    print("\n=== 开始训练 ===")
     for epoch in range(epochs):
         # 动态调整DropPath
         drop_path_scheduler.step(epoch)
