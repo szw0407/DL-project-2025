@@ -142,15 +142,15 @@ class StorePredictionModel(nn.Module):
         num_classes,
         embed_dim=32,
         coord_dim=8,
-        trans_dim=64,
-        n_layers=2,
+        trans_dim=32,  # 极致收缩主干宽度
+        n_layers=2,    # 极致收缩层数
         n_heads=4,
-        dropout=0.5,
+        dropout=0.4,   # Dropout极致提升
         bert_model_name="bert-base-chinese",
         use_bert=True,
         bert_feature_dim=768,
         mlp_ratio=2.0,
-        drop_path=0.3,
+        drop_path=0.5, # DropPath极致提升
         brand_type_num=64,
         brand_type_embed_dim=8,
         brand_type_to_id=None,
@@ -201,9 +201,15 @@ class StorePredictionModel(nn.Module):
                 self.use_bert = False
         if self.use_bert:
             self.bert_proj = nn.Sequential(
-                nn.Linear(self.bert_feature_dim, embed_dim),
-                nn.BatchNorm1d(embed_dim),
+                nn.Linear(self.bert_feature_dim, embed_dim * 2),
+                nn.BatchNorm1d(embed_dim * 2),
                 nn.SiLU(),  # GELU -> SiLU
+                nn.Linear(embed_dim * 2, embed_dim),
+                nn.BatchNorm1d(embed_dim),
+                nn.ReLU(),
+                nn.Linear(embed_dim, embed_dim),
+                nn.BatchNorm1d(embed_dim),
+                nn.ReLU(),
                 nn.Dropout(dropout),
             )
         # 多尺度卷积特征融合（可选）
@@ -266,7 +272,7 @@ class StorePredictionModel(nn.Module):
         self.output_fc = nn.Linear(trans_dim // 4, num_classes)
         self.dropout_layer = nn.Dropout(dropout)
         self.se_block = SEBlock(trans_dim)
-        self.feature_dropblock = FeatureDropBlock(drop_prob=0.2)
+        self.feature_dropblock = FeatureDropBlock(drop_prob=0.4)  # DropBlock极致提升
 
     def extract_bert_features(self, brand_names, brand_types, seq_len):
         if not self.use_bert:
