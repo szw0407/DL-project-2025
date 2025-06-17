@@ -275,7 +275,10 @@ class StorePredictionModel(nn.Module):
         # TransformerEncoder
         self.transformer = nn.Sequential(
             *[
-                TransformerBlock(trans_dim, n_heads, mlp_ratio, dropout, drop_path)
+                nn.Sequential(
+                    TransformerBlock(trans_dim, n_heads, mlp_ratio, dropout, drop_path),
+                    nn.LayerNorm(trans_dim)
+                )
                 for _ in range(n_layers)
             ]
         )
@@ -311,6 +314,35 @@ class StorePredictionModel(nn.Module):
         # ===== 主分支融合权重参数 =====
         n_fuse = 2 if self.use_gnn else 1  # 只融合transformer和gru（gnn可选）
         self.fuse_weights = nn.Parameter(torch.ones(n_fuse))
+        # 1. 增强正则化：增大dropout，添加L2正则建议
+        dropout = min(0.25, dropout * 2)  # 小数据集建议更大dropout
+        self.dropout_layer = nn.Dropout(dropout)
+        # 2. Transformer分支增加LayerNorm
+        self.transformer = nn.Sequential(
+            *[
+                nn.Sequential(
+                    TransformerBlock(trans_dim, n_heads, mlp_ratio, dropout, drop_path),
+                    nn.LayerNorm(trans_dim)
+                )
+                for _ in range(n_layers)
+            ]
+        )
+        # 3. GRU分支输出加LayerNorm
+        self.rnn_norm = nn.LayerNorm(self.rnn_dim)
+        # 4. 融合方式：加权平均+注意力融合（可选）
+        # 动态根据分支数设置fuse_attn的in_features
+        self.n_fuse = 1 + int(self.use_gnn) + int(self.use_bert)
+        self.fuse_attn = nn.Linear(self.n_fuse, 1, bias=False)
+        # 5. BERT参数可选冻结
+        if self.use_bert:
+            for p in self.bert_model.parameters():
+                p.requires_grad = False  # 小数据集建议先冻结BERT
+        # ===== 多分支GRU：每个主分支后都加GRU =====
+        self.rnn_dim = trans_dim
+        self.trans_gru = nn.GRU(trans_dim, self.rnn_dim // 2, num_layers=1, batch_first=True, bidirectional=True)
+        if self.use_gnn:
+            self.gnn_gru = nn.GRU(self.trans_dim, self.rnn_dim // 2, num_layers=1, batch_first=True, bidirectional=True)
+        self.rnn_norm = nn.LayerNorm(self.rnn_dim)
 
     def extract_bert_features(self, brand_names, brand_types, seq_len):
         if not self.use_bert:
@@ -358,10 +390,10 @@ class StorePredictionModel(nn.Module):
             coord_emb_flat = self.coord_encoder(coords_flat)
             coord_emb = coord_emb_flat.view(batch_size, seq_len, self.coord_dim)
             features.append(coord_emb)
+        # BERT特征提取（只提取一次）
+        bert_features = None
         if self.use_bert and brand_names is not None and brand_types is not None:
-            bert_features = self.extract_bert_features(
-                brand_names, brand_types, seq_len
-            )
+            bert_features = self.extract_bert_features(brand_names, brand_types, seq_len)
             if bert_features is not None:
                 features.append(bert_features)
         if (
@@ -385,8 +417,12 @@ class StorePredictionModel(nn.Module):
         x_proj = self.feature_dropblock(x_proj)
         # Transformer分支
         x_trans = self.transformer(x_proj)
-        x_trans = self.norm(x_trans)
+        if isinstance(x_trans, (list, tuple)):
+            x_trans = x_trans[-1]
+        x_trans_gru, _ = self.trans_gru(x_trans)
+        x_trans_gru = self.rnn_norm(x_trans_gru)
         # GNN分支
+        x_gnn_gru = None
         if self.use_gnn:
             x_gnn_in = x.reshape(batch_size * seq_len, -1)
             if edge_index is None:
@@ -398,37 +434,33 @@ class StorePredictionModel(nn.Module):
             for gnn_block in self.gnn_blocks:
                 x_gnn = gnn_block(x_gnn, edge_index)
             x_gnn = x_gnn.view(batch_size, seq_len, self.gnn_dim)
+            x_gnn_gru, _ = self.gnn_gru(x_gnn)
+            x_gnn_gru = self.rnn_norm(x_gnn_gru)
         # 时序分支（GRU）
         x_rnn, _ = self.rnn(x)
+        x_rnn = self.rnn_norm(x_rnn)
         # ===== 主分支加权融合（不含BERT） =====
-        fuse_list = [x_trans]
-        if self.use_gnn:
-            if self.gnn_dim != self.trans_dim:
-                x_gnn = nn.Linear(self.gnn_dim, self.trans_dim).to(x_gnn.device)(x_gnn)
-            fuse_list.append(x_gnn)
-        fuse_list.append(x_rnn)
-        fuse_weights = torch.softmax(self.fuse_weights, dim=0)
+        fuse_list = [x_trans_gru]
+        if self.use_gnn and x_gnn_gru is not None:
+            fuse_list.append(x_gnn_gru)
+        # 主分支融合（加权平均）
+        fuse_weights = torch.softmax(self.fuse_weights[:len(fuse_list)], dim=0)
         x_fused_main = sum(w * f for w, f in zip(fuse_weights, fuse_list))
         # ===== BERT特征投票融合 =====
-        if self.use_bert and brand_names is not None and brand_types is not None:
-            bert_features = self.extract_bert_features(brand_names, brand_types, seq_len)
-            if bert_features is None or not isinstance(bert_features, torch.Tensor):
-                bert_features = torch.zeros_like(x_proj)
+        if self.use_bert and bert_features is not None:
             bert_features_proj = self.bert_vote_proj(bert_features)
-            bert_vote = torch.sigmoid(self.bert_vote_weight)
-            x_fused = x_fused_main + bert_vote * bert_features_proj
-        else:
-            if isinstance(x_fused_main, torch.Tensor):
-                bert_features_proj = torch.zeros_like(x_fused_main)
-            else:
-                bert_features_proj = torch.zeros_like(x_proj)
+            # BERT分支单独加权
             x_fused = x_fused_main + torch.sigmoid(self.bert_vote_weight) * bert_features_proj
+        else:
+            x_fused = x_fused_main
         # 池化
-        if hasattr(x_fused, 'dim') and x_fused.dim() == 3:
+        if isinstance(x_fused, torch.Tensor) and x_fused.dim() == 3:
             last_out = x_fused[:, 0, :]
         else:
             last_out = x_fused
+        # 输出前建议加LayerNorm
         last_out = self.se_block(last_out)
+        last_out = nn.LayerNorm(last_out.shape[-1]).to(last_out.device)(last_out)
         last_out = self.dropout_layer(last_out)
         # Mixup（可选）
         if mixup and targets is not None:
