@@ -1,5 +1,3 @@
-import torch_geometric
-
 import torch
 import torch.nn as nn
 import numpy as np
@@ -12,6 +10,7 @@ from model import StorePredictionModel
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import LambdaLR
 import random
+import json
 
 plt.rcParams['font.family'] = 'Noto Sans SC'
 DEFAULT_EMBED_DIM = 16
@@ -239,7 +238,8 @@ def train_model(
         n_heads=n_heads,
         dropout=dropout,
         drop_path=drop_path,
-        use_bert=use_bert,
+        use_bert=True,  # 强制开启BERT
+        use_gnn=True,   # 强制开启GNN
         brand_type_num=brand_type_num,
         brand_type_embed_dim=8,
         use_spatial_stats=use_spatial_stats
@@ -346,20 +346,28 @@ def train_model(
             contrastive_pairs = None
             if use_contrastive and contrastive_pair_func is not None:
                 contrastive_pairs = contrastive_pair_func(batch)
+            # 支持GNN edge_index
+            edge_index = None
+            if model.use_gnn:
+                # 这里假设每个batch都用全连接图（可根据实际数据自定义）
+                seq_len = seq_ids_tensor.shape[1]
+                idx = torch.arange(seq_len, device=seq_ids_tensor.device)
+                edge_index = torch.combinations(idx, r=2).T
+                edge_index = torch.cat([edge_index, edge_index.flip(0)], dim=1)
             # 支持mixup
             if use_mixup:
                 outputs, y_a, y_b, lam, contrastive_loss = model(
                     seq_ids_tensor, seq_coords_tensor, brand_names, brand_types, brand_type_ids=brand_type_ids, mixup=True, targets=targets_tensor, mixup_alpha=mixup_alpha,
-                    contrastive=use_contrastive, contrastive_pairs=contrastive_pairs, contrastive_temperature=contrastive_temperature
+                    contrastive=use_contrastive, contrastive_pairs=contrastive_pairs, contrastive_temperature=contrastive_temperature, edge_index=edge_index
                 )
                 loss = lam * criterion(outputs, y_a, contrastive_loss, contrastive_weight) + (1 - lam) * criterion(outputs, y_b, contrastive_loss, contrastive_weight)
             elif use_contrastive:
                 outputs, contrastive_loss = model(
-                    seq_ids_tensor, seq_coords_tensor, brand_names, brand_types, brand_type_ids=brand_type_ids, contrastive=True, contrastive_pairs=contrastive_pairs, contrastive_temperature=contrastive_temperature
+                    seq_ids_tensor, seq_coords_tensor, brand_names, brand_types, brand_type_ids=brand_type_ids, contrastive=True, contrastive_pairs=contrastive_pairs, contrastive_temperature=contrastive_temperature, edge_index=edge_index
                 )
                 loss = criterion(outputs, targets_tensor, contrastive_loss, contrastive_weight)
             else:
-                outputs = model(seq_ids_tensor, seq_coords_tensor, brand_names, brand_types, brand_type_ids=brand_type_ids)
+                outputs = model(seq_ids_tensor, seq_coords_tensor, brand_names, brand_types, brand_type_ids=brand_type_ids, edge_index=edge_index)
                 loss = criterion(outputs, targets_tensor)
             # 反向传播和优化
             loss.backward()
@@ -401,7 +409,13 @@ def train_model(
                     brand_types = [brand_type]
                 
                 # 前向传播
-                outputs = model(seq_ids, seq_coords_tensor, brand_names, brand_types)
+                edge_index = None
+                if hasattr(model, 'use_gnn') and model.use_gnn:
+                    seq_len = seq_ids.shape[1] if seq_ids.dim() > 1 else seq_ids.shape[0]
+                    idx = torch.arange(seq_len, device=seq_ids.device)
+                    edge_index = torch.combinations(idx, r=2).T
+                    edge_index = torch.cat([edge_index, edge_index.flip(0)], dim=1)
+                outputs = model(seq_ids, seq_coords_tensor, brand_names, brand_types, edge_index=edge_index)
                 
                 # 计算预测
                 probs = outputs.softmax(dim=1)
@@ -444,34 +458,9 @@ def train_model(
             best_model_state = model.state_dict().copy()
             best_epoch = epoch
             patience_counter = 0
+            # 保存时直接保存整个模型
             if model_save_path:
-                while True:
-                    try:
-                        torch.save({
-                            'epoch': epoch,
-                            'model_state_dict': model.state_dict(),
-                            'optimizer_state_dict': optimizer.state_dict(),
-                            'val_mrr': val_mrr,
-                            'val_acc1': val_acc_k[1],
-                            'val_acc5': val_acc_k[5],
-                            'val_acc10': val_acc_k[10],
-                            'composite_score': composite_score,
-                            'embed_dim': embed_dim,
-                            'coord_dim': coord_dim_config,
-                            'trans_dim': trans_dim,
-                            'n_layers': n_layers,
-                            'n_heads': n_heads,
-                            'dropout': dropout,
-                            'mlp_ratio': mlp_ratio,
-                            'drop_path': drop_path,
-                            'num_classes': num_total_classes
-                        }, model_save_path)
-                        print(f"模型已保存至: {model_save_path}")
-                        break
-                    except Exception as e:
-                        print(f"保存模型时出错: {e}")
-                        print("请检查文件路径和权限，稍后重试...")
-                        time.sleep(5)
+                save_model_state(model, model_save_path)
         else:
             patience_counter += 1
             if patience_counter >= patience:
@@ -555,6 +544,17 @@ def cutmix_batch(batch_seq_ids, batch_seq_coords, batch_targets, cutmix_prob=0.3
         new_targets.append(batch_targets[i] if lam > 0.5 else batch_targets[j])
     return new_seq_ids, new_seq_coords, new_targets
 
+def save_model_state(model, path):
+    """使用PyTorch 2.6+推荐的torch.save(model, path)保存整个模型（含结构和参数）"""
+    torch.save(model, path)
+    print(f"模型已用torch.save(model, path)保存至: {path}")
+
+def load_model_state(path, map_location=None):
+    """使用PyTorch 2.6+推荐的torch.load(path)直接加载整个模型"""
+    model = torch.load(path, map_location=map_location, weights_only=False)
+    print(f"模型已用torch.load(path)加载: {path}")
+    return model
+
 if __name__ == "__main__":
     USE_CUDA_IF_AVAILABLE = True
     MODEL_SAVE_FILENAME = "store_predictor_best.pth"
@@ -615,6 +615,13 @@ if __name__ == "__main__":
         brand_type_map=brand_type_map
     )
     
+    # ========== 加载最优模型参数 ==========
+    device_for_eval = torch.device('cuda' if USE_CUDA_IF_AVAILABLE and torch.cuda.is_available() else 'cpu')
+    if os.path.exists(model_output_path):
+        print(f"\n[评估前] 加载最优模型: {model_output_path}")
+        trained_model = load_model_state(model_output_path, map_location=device_for_eval)
+        trained_model.to(device_for_eval)
+    
     if trained_model and test_samples:
         print("\n在测试集上评估最终模型...")
         device_for_eval = torch.device('cuda' if USE_CUDA_IF_AVAILABLE and torch.cuda.is_available() else 'cpu')
@@ -625,6 +632,7 @@ if __name__ == "__main__":
         reciprocal_ranks = []
         
         test_progress_bar = tqdm(test_samples, desc="测试集评估", ncols=100)
+        # load best model state
         
         with torch.no_grad():
             for test_sample in test_progress_bar:
@@ -646,24 +654,30 @@ if __name__ == "__main__":
                     brand_types = [brand_type]
                 
                 # 前向传播
-                outputs = trained_model(seq_ids, seq_coords_tensor, brand_names, brand_types)
-                
+                edge_index = None
+                if hasattr(trained_model, 'use_gnn') and trained_model.use_gnn:
+                    seq_len = seq_ids.shape[1] if seq_ids.dim() > 1 else seq_ids.shape[0]
+                    idx = torch.arange(seq_len, device=seq_ids.device)
+                    edge_index = torch.combinations(idx, r=2).T
+                    edge_index = torch.cat([edge_index, edge_index.flip(0)], dim=1)
+                outputs = trained_model(seq_ids, seq_coords_tensor, brand_names, brand_types, edge_index=edge_index)
                 # 计算预测
                 probs = outputs.softmax(dim=1)
                 _, pred_indices = probs.sort(descending=True)
                 pred_indices = pred_indices.squeeze(0).tolist()
-                
                 # 计算Top-K准确率
                 for k in [1, 5, 10]:
                     if true_idx_val in pred_indices[:k]:
                         correct_at_k[k] += 1
-                
                 # 计算MRR
                 try:
                     rank = pred_indices.index(true_idx_val) + 1
                     reciprocal_ranks.append(1.0 / rank)
                 except ValueError:
                     reciprocal_ranks.append(0.0)
+        # 关闭进度条
+        test_progress_bar.close()
+
         
         # 计算最终指标
         test_acc_k = {k: correct_at_k[k] / len(test_samples) for k in correct_at_k}
