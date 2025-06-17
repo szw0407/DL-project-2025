@@ -198,11 +198,16 @@ class StorePredictionModel(nn.Module):
         self.gnn_fuse = gnn_fuse
         # Embedding
         self.id_embedding = nn.Embedding(num_classes, embed_dim)
+        # 坐标特征编码：MLP+LayerNorm
         if coord_dim > 0:
-            self.coord_embedding_layer = nn.Linear(2, coord_dim)
-            self.coord_bn = nn.BatchNorm1d(coord_dim)
+            self.coord_encoder = nn.Sequential(
+                nn.Linear(2, coord_dim * 2),
+                nn.SiLU(),
+                nn.Linear(coord_dim * 2, coord_dim),
+                nn.LayerNorm(coord_dim),
+            )
         else:
-            self.coord_embedding_layer = None
+            self.coord_encoder = None
         # brand_type embedding + MLP (增强)
         self.brand_type_embedding = nn.Embedding(brand_type_num, brand_type_embed_dim)
         self.brand_type_mlp = nn.Sequential(
@@ -237,6 +242,7 @@ class StorePredictionModel(nn.Module):
                 nn.ReLU(),
                 nn.Dropout(dropout),
             )
+            self.bert_vote_proj = nn.Linear(embed_dim, trans_dim)
         # GNN分支
         self.use_gnn = HAS_PYG
         if self.use_gnn:
@@ -299,8 +305,11 @@ class StorePredictionModel(nn.Module):
         self.rnn = nn.GRU(
             in_dim, self.rnn_dim // 2, num_layers=1, batch_first=True, bidirectional=True
         )
-        # ===== 新增：可学习加权融合 =====
-        n_fuse = 3 if self.use_gnn else 2  # transformer/gnn/rnn
+        # ===== 新增：BERT特征投票权重参数（与主分支分离） =====
+        # 假设每个类别/品牌类型有独立权重，或全局权重
+        self.bert_vote_weight = nn.Parameter(torch.ones(1))  # 可扩展为更复杂结构
+        # ===== 主分支融合权重参数 =====
+        n_fuse = 2 if self.use_gnn else 1  # 只融合transformer和gru（gnn可选）
         self.fuse_weights = nn.Parameter(torch.ones(n_fuse))
 
     def extract_bert_features(self, brand_names, brand_types, seq_len):
@@ -344,13 +353,10 @@ class StorePredictionModel(nn.Module):
         batch_size, seq_len = seq_ids.shape[:2]
         id_emb = self.id_embedding(seq_ids)  # (B, T, D)
         features = [id_emb]
-        if self.coord_embedding_layer is not None and seq_coords is not None:
+        if self.coord_encoder is not None and seq_coords is not None:
             coords_flat = seq_coords.reshape(batch_size * seq_len, 2)
-            coord_emb_flat = self.coord_embedding_layer(coords_flat)
-            # LayerNorm替换BN，提升小数据泛化
-            coord_emb_flat = nn.LayerNorm(self.coord_dim).to(coord_emb_flat.device)(coord_emb_flat)
-            coord_emb_activated = torch.tanh(coord_emb_flat)
-            coord_emb = coord_emb_activated.view(batch_size, seq_len, self.coord_dim)
+            coord_emb_flat = self.coord_encoder(coords_flat)
+            coord_emb = coord_emb_flat.view(batch_size, seq_len, self.coord_dim)
             features.append(coord_emb)
         if self.use_bert and brand_names is not None and brand_types is not None:
             bert_features = self.extract_bert_features(
@@ -372,6 +378,7 @@ class StorePredictionModel(nn.Module):
             brand_type_feat = self.brand_type_mlp(brand_type_emb)
             brand_type_feat = brand_type_feat.unsqueeze(1).expand(-1, seq_len, -1)
             features.append(brand_type_feat)
+        # ...特征拼接...
         x = torch.cat(features, dim=-1)  # (B, T, F)
         x_proj = self.input_proj(x)
         x_proj = self.input_norm(x_proj)
@@ -393,18 +400,31 @@ class StorePredictionModel(nn.Module):
             x_gnn = x_gnn.view(batch_size, seq_len, self.gnn_dim)
         # 时序分支（GRU）
         x_rnn, _ = self.rnn(x)
-        # ===== 可学习加权融合 =====
+        # ===== 主分支加权融合（不含BERT） =====
         fuse_list = [x_trans]
         if self.use_gnn:
-            # 若维度不一致，线性投影到trans_dim
             if self.gnn_dim != self.trans_dim:
                 x_gnn = nn.Linear(self.gnn_dim, self.trans_dim).to(x_gnn.device)(x_gnn)
             fuse_list.append(x_gnn)
         fuse_list.append(x_rnn)
         fuse_weights = torch.softmax(self.fuse_weights, dim=0)
-        x_fused = sum(w * f for w, f in zip(fuse_weights, fuse_list))
+        x_fused_main = sum(w * f for w, f in zip(fuse_weights, fuse_list))
+        # ===== BERT特征投票融合 =====
+        if self.use_bert and brand_names is not None and brand_types is not None:
+            bert_features = self.extract_bert_features(brand_names, brand_types, seq_len)
+            if bert_features is None or not isinstance(bert_features, torch.Tensor):
+                bert_features = torch.zeros_like(x_proj)
+            bert_features_proj = self.bert_vote_proj(bert_features)
+            bert_vote = torch.sigmoid(self.bert_vote_weight)
+            x_fused = x_fused_main + bert_vote * bert_features_proj
+        else:
+            if isinstance(x_fused_main, torch.Tensor):
+                bert_features_proj = torch.zeros_like(x_fused_main)
+            else:
+                bert_features_proj = torch.zeros_like(x_proj)
+            x_fused = x_fused_main + torch.sigmoid(self.bert_vote_weight) * bert_features_proj
         # 池化
-        if isinstance(x_fused, torch.Tensor) and x_fused.ndim == 3:
+        if hasattr(x_fused, 'dim') and x_fused.dim() == 3:
             last_out = x_fused[:, 0, :]
         else:
             last_out = x_fused
