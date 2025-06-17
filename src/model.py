@@ -278,20 +278,30 @@ class StorePredictionModel(nn.Module):
         self.global_attn = nn.MultiheadAttention(
             trans_dim, n_heads, dropout=dropout, batch_first=True
         )        # 增强MLP Head
+        # MLP Head输入输出均应为trans_dim（加权融合后特征维度）
         self.mlp = nn.Sequential(
-            nn.Linear(self.fused_dim, self.fused_dim),
-            nn.LayerNorm(self.fused_dim),
+            nn.Linear(self.trans_dim, self.trans_dim),
+            nn.LayerNorm(self.trans_dim),
             nn.SiLU(),
             nn.Dropout(dropout),
-            nn.Linear(self.fused_dim, self.fused_dim // 2),
-            nn.LayerNorm(self.fused_dim // 2),
+            nn.Linear(self.trans_dim, self.trans_dim // 2),
+            nn.LayerNorm(self.trans_dim // 2),
             nn.SiLU(),
             nn.Dropout(dropout),
         )
-        self.output_fc = nn.Linear(self.fused_dim // 2, num_classes)
+        self.output_fc = nn.Linear(self.trans_dim // 2, num_classes)
         self.dropout_layer = nn.Dropout(dropout)
-        self.se_block = SEBlock(self.fused_dim)
+        # 注意：SEBlock的输入通道应与加权融合后特征维度一致（trans_dim）
+        self.se_block = SEBlock(self.trans_dim)
         self.feature_dropblock = FeatureDropBlock(drop_prob=0.1)
+        # ===== 新增：轻量级时序分支（GRU） =====
+        self.rnn_dim = trans_dim  # 保持与transformer输出一致，便于融合
+        self.rnn = nn.GRU(
+            in_dim, self.rnn_dim // 2, num_layers=1, batch_first=True, bidirectional=True
+        )
+        # ===== 新增：可学习加权融合 =====
+        n_fuse = 3 if self.use_gnn else 2  # transformer/gnn/rnn
+        self.fuse_weights = nn.Parameter(torch.ones(n_fuse))
 
     def extract_bert_features(self, brand_names, brand_types, seq_len):
         if not self.use_bert:
@@ -371,32 +381,33 @@ class StorePredictionModel(nn.Module):
         x_trans = self.norm(x_trans)
         # GNN分支
         if self.use_gnn:
-            # GNN输入: (B, T, F) -> (B*T, F)
             x_gnn_in = x.reshape(batch_size * seq_len, -1)
             if edge_index is None:
-                # 默认构造全连接图（适合小数据/短序列）
                 idx = torch.arange(seq_len, device=x.device)
                 edge_index = torch.combinations(idx, r=2).T
-                edge_index = torch.cat([edge_index, edge_index.flip(0)], dim=1)  # 双向
+                edge_index = torch.cat([edge_index, edge_index.flip(0)], dim=1)
             edge_index = edge_index.to(x.device)
             x_gnn = x_gnn_in
             for gnn_block in self.gnn_blocks:
                 x_gnn = gnn_block(x_gnn, edge_index)
             x_gnn = x_gnn.view(batch_size, seq_len, self.gnn_dim)
-        # 融合
+        # 时序分支（GRU）
+        x_rnn, _ = self.rnn(x)
+        # ===== 可学习加权融合 =====
+        fuse_list = [x_trans]
         if self.use_gnn:
-            if self.gnn_fuse == "cat":
-                x_fused = torch.cat([x_trans, x_gnn], dim=-1)
-            elif self.gnn_fuse == "mean":
-                x_fused = (x_trans + x_gnn) / 2
-            elif self.gnn_fuse == "sum":
-                x_fused = x_trans + x_gnn
-            else:
-                x_fused = x_trans
-        else:
-            x_fused = x_trans
+            # 若维度不一致，线性投影到trans_dim
+            if self.gnn_dim != self.trans_dim:
+                x_gnn = nn.Linear(self.gnn_dim, self.trans_dim).to(x_gnn.device)(x_gnn)
+            fuse_list.append(x_gnn)
+        fuse_list.append(x_rnn)
+        fuse_weights = torch.softmax(self.fuse_weights, dim=0)
+        x_fused = sum(w * f for w, f in zip(fuse_weights, fuse_list))
         # 池化
-        last_out = x_fused[:, 0, :] if x_fused.dim() == 3 else x_fused
+        if isinstance(x_fused, torch.Tensor) and x_fused.ndim == 3:
+            last_out = x_fused[:, 0, :]
+        else:
+            last_out = x_fused
         last_out = self.se_block(last_out)
         last_out = self.dropout_layer(last_out)
         # Mixup（可选）
