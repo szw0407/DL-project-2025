@@ -1,7 +1,6 @@
-from unittest.mock import DEFAULT
+
 import torch
 import torch.nn as nn
-import torch.optim as optim
 import numpy as np
 import os
 import time
@@ -30,6 +29,9 @@ DEFAULT_DROP_PATH = 0.3 # 适当降低DropPath
 DEFAULT_BATCH_SIZE = 48  # 适当降低batch size以适应更大的模型
 DEFAULT_OPTIMIZER = 'adamw'
 DEFAULT_PATIENCE = 15  # 增加patience，给更深模型更多训练时间
+DEFAULT_CONTRASTIVE = True
+DEFAULT_CONTRASTIVE_WEIGHT = 0.1
+DEFAULT_CONTRASTIVE_TEMPERATURE = 0.5
 
 class StochasticDepthScheduler:
     """训练过程中动态调整DropPath概率，提升泛化能力"""
@@ -117,8 +119,16 @@ def get_warmup_scheduler(optimizer, warmup_steps, total_steps):
         return max(0.0, float(total_steps - current_step) / float(max(1, total_steps - warmup_steps)))
     return LambdaLR(optimizer, lr_lambda)
 
-def get_loss_fn(num_classes, smoothing=0.1):
-    return nn.CrossEntropyLoss(label_smoothing=smoothing)
+def get_loss_fn(num_classes, smoothing=0.1, use_contrastive=False):
+    if use_contrastive:
+        def loss_fn(outputs, targets, contrastive_loss=None, contrastive_weight=0.1):
+            ce_loss = nn.CrossEntropyLoss(label_smoothing=smoothing)(outputs, targets)
+            if contrastive_loss is not None:
+                return ce_loss + contrastive_weight * contrastive_loss
+            return ce_loss
+        return loss_fn
+    else:
+        return nn.CrossEntropyLoss(label_smoothing=smoothing)
 
 def train_model(
     train_samples, 
@@ -145,7 +155,11 @@ def train_model(
     grad_clip=2.0,
     batch_size=DEFAULT_BATCH_SIZE,
     optimizer_type=DEFAULT_OPTIMIZER,
-    brand_type_map=None
+    brand_type_map=None,
+    use_contrastive=DEFAULT_CONTRASTIVE,
+    contrastive_weight=DEFAULT_CONTRASTIVE_WEIGHT,
+    contrastive_temperature=DEFAULT_CONTRASTIVE_TEMPERATURE,
+    contrastive_pair_func=None
 ):
     """
     训练门店选址预测模型。
@@ -196,6 +210,7 @@ def train_model(
     print(f"使用BERT: {use_bert}")
     print(f"Mixup: {use_mixup}")
     print(f"梯度裁剪: {grad_clip}")
+    print(f"对比学习: {use_contrastive}, 对比损失权重: {contrastive_weight}, 温度: {contrastive_temperature}")
     
     # 确定设备
     device = torch.device(device_name if torch.cuda.is_available() and device_name == 'cuda' else 'cpu')
@@ -229,7 +244,7 @@ def train_model(
     drop_path_scheduler = StochasticDepthScheduler(model, max_drop_path=drop_path, min_drop_path=0.05, total_epochs=epochs)
     
     # 定义损失函数和优化器
-    criterion = get_loss_fn(num_total_classes, smoothing=0.1)
+    criterion = get_loss_fn(num_total_classes, smoothing=0.1, use_contrastive=use_contrastive)
     optimizer = get_optimizer(model, lr, weight_decay, optimizer_type)
     total_steps = epochs * max(1, len(train_samples) // batch_size)
     warmup_steps = int(0.1 * total_steps)
@@ -322,10 +337,22 @@ def train_model(
             brand_names = batch_brand_names if use_bert else None
             brand_types = batch_brand_types if use_bert else None
             brand_type_ids = torch.tensor(batch_brand_type_ids, dtype=torch.long).to(device)
+            # 支持对比学习
+            contrastive_pairs = None
+            if use_contrastive and contrastive_pair_func is not None:
+                contrastive_pairs = contrastive_pair_func(batch)
             # 支持mixup
             if use_mixup:
-                outputs, y_a, y_b, lam = model(seq_ids_tensor, seq_coords_tensor, brand_names, brand_types, brand_type_ids=brand_type_ids, mixup=True, targets=targets_tensor, mixup_alpha=mixup_alpha)
-                loss = lam * criterion(outputs, y_a) + (1 - lam) * criterion(outputs, y_b)
+                outputs, y_a, y_b, lam, contrastive_loss = model(
+                    seq_ids_tensor, seq_coords_tensor, brand_names, brand_types, brand_type_ids=brand_type_ids, mixup=True, targets=targets_tensor, mixup_alpha=mixup_alpha,
+                    contrastive=use_contrastive, contrastive_pairs=contrastive_pairs, contrastive_temperature=contrastive_temperature
+                )
+                loss = lam * criterion(outputs, y_a, contrastive_loss, contrastive_weight) + (1 - lam) * criterion(outputs, y_b, contrastive_loss, contrastive_weight)
+            elif use_contrastive:
+                outputs, contrastive_loss = model(
+                    seq_ids_tensor, seq_coords_tensor, brand_names, brand_types, brand_type_ids=brand_type_ids, contrastive=True, contrastive_pairs=contrastive_pairs, contrastive_temperature=contrastive_temperature
+                )
+                loss = criterion(outputs, targets_tensor, contrastive_loss, contrastive_weight)
             else:
                 outputs = model(seq_ids_tensor, seq_coords_tensor, brand_names, brand_types, brand_type_ids=brand_type_ids)
                 loss = criterion(outputs, targets_tensor)

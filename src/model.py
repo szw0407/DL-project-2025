@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from transformers import BertModel, BertTokenizer
 
 
@@ -144,7 +145,31 @@ class AttentionPooling(nn.Module):
         return pooled
 
 
+def nt_xent_loss(z_i, z_j, temperature=0.5):
+    """NT-Xent对比损失，z_i/z_j: (B, D)"""
+    z_i = F.normalize(z_i, dim=1)
+    z_j = F.normalize(z_j, dim=1)
+    representations = torch.cat([z_i, z_j], dim=0)  # (2B, D)
+    similarity_matrix = torch.matmul(representations, representations.T)  # (2B, 2B)
+    batch_size = z_i.size(0)
+    labels = torch.arange(batch_size, device=z_i.device)
+    labels = torch.cat([labels, labels], dim=0)
+    mask = torch.eye(2 * batch_size, device=z_i.device).bool()
+    similarity_matrix = similarity_matrix / temperature
+    similarity_matrix = similarity_matrix.masked_fill(mask, -1e9)
+    positives = torch.cat([
+        torch.diag(similarity_matrix, batch_size),
+        torch.diag(similarity_matrix, -batch_size)
+    ], dim=0)
+    negatives = similarity_matrix[~mask].view(2 * batch_size, -1)
+    logits = torch.cat([positives.unsqueeze(1), negatives], dim=1)
+    labels = torch.zeros(2 * batch_size, dtype=torch.long, device=z_i.device)
+    loss = F.cross_entropy(logits, labels)
+    return loss
+
+
 class StorePredictionModel(nn.Module):
+    
     def __init__(
         self,
         num_classes,
@@ -176,7 +201,9 @@ class StorePredictionModel(nn.Module):
         self.brand_type_num = brand_type_num
         self.brand_type_embed_dim = brand_type_embed_dim
         self.brand_type_to_id = brand_type_to_id if brand_type_to_id is not None else {}
+        
         self.use_multiscale_conv = use_multiscale_conv
+        
         self.use_spatial_stats = use_spatial_stats
         self.use_attn_pool = use_attn_pool
         # Embedding
@@ -325,6 +352,9 @@ class StorePredictionModel(nn.Module):
         mixup=False,
         targets=None,
         mixup_alpha=0.2,
+        contrastive=False,
+        contrastive_pairs=None,
+        contrastive_temperature=0.5,
     ):
         batch_size, seq_len = seq_ids.shape[:2]
         id_emb = self.id_embedding(seq_ids)  # (B, T, D)
@@ -411,7 +441,23 @@ class StorePredictionModel(nn.Module):
             y_a = y_b = lam = None
         mlp_out = self.mlp(last_out)
         logits = self.output_fc(mlp_out)
+        # 对比学习分支
+        contrastive_loss = None
+        if contrastive and contrastive_pairs is not None:
+            # contrastive_pairs: [(seq_ids1, seq_ids2, ...)]
+            z_i_list, z_j_list = [], []
+            for (seq1, seq2) in contrastive_pairs:
+                # 只用id嵌入和主干特征，或可自定义
+                out1 = self.forward(seq1, seq_coords=None, brand_names=None, brand_types=None, contrastive=False)
+                out2 = self.forward(seq2, seq_coords=None, brand_names=None, brand_types=None, contrastive=False)
+                z_i_list.append(out1)
+                z_j_list.append(out2)
+            z_i = torch.cat(z_i_list, dim=0)
+            z_j = torch.cat(z_j_list, dim=0)
+            contrastive_loss = nt_xent_loss(z_i, z_j, temperature=contrastive_temperature)
         # logits = torch.softmax(logits, dim=-1)  # 如为分类任务可解注释
         if mixup and targets is not None:
-            return logits, y_a, y_b, lam
+            return logits, y_a, y_b, lam, contrastive_loss
+        if contrastive:
+            return logits, contrastive_loss
         return logits
