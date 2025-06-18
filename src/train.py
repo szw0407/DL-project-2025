@@ -2,7 +2,6 @@ import torch
 import torch.nn as nn
 import numpy as np
 import os
-import time
 import matplotlib.pyplot as plt
 from tqdm import tqdm
 from data_preprocessing import load_data
@@ -10,7 +9,6 @@ from model import StorePredictionModel
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import LambdaLR
 import random
-import json
 
 plt.rcParams['font.family'] = 'Noto Sans SC'
 DEFAULT_EMBED_DIM = 16
