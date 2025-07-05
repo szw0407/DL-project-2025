@@ -185,7 +185,7 @@ def load_all_data(train_csv, test_csv, grid_csv, val_size=0.2):
     val_set = [train_samples[i] for i in val_idx]
     return train_set, val_set, test_samples, num_classes, grid2idx
 
-def preprocess_brand_texts(brand_texts, tokenizer, max_length=64):
+def preprocess_brand_texts(brand_texts: list[str], tokenizer: BertTokenizer, max_length=64):
     """
     预先对品牌文本进行tokenization，避免在训练过程中重复tokenize
     

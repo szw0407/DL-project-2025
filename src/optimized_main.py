@@ -1,11 +1,10 @@
 """
-优化版主程序 - 解决GPU利用率问题
+优化版主程序 - GPU常驻数据，最大化GPU利用率
 """
 import torch
 from data_preprocessing_new import load_all_data
 from optimized_model import OptimizedNextGridPredictor
-from optimized_train import optimized_train_model
-from evaluate import evaluate_model
+from gpu_resident_train import gpu_resident_train_model, gpu_resident_evaluate_model
 
 def main():
     # 设备配置
@@ -50,29 +49,33 @@ def main():
     print(f"模型参数总数: {sum(p.numel() for p in model.parameters()):,}")
     print(f"可训练参数: {sum(p.numel() for p in model.parameters() if p.requires_grad):,}")
     
-    # 优化训练配置
+    # 优化训练配置 - GPU常驻模式
     training_config = {
         'num_epochs': 40,
-        'batch_size': 16,  # 可以根据显存情况调整
+        'batch_size': 64,  # GPU常驻模式可以使用更大的batch_size
         'lr': 2e-5,  # BERT建议使用较小的学习率
         'patience': 5,
         'use_amp': True,  # 混合精度训练
-        'num_workers': 4  # 数据加载进程数
+        'bert_model_name': 'bert-base-chinese'  # 指定BERT模型
     }
     
-    print("\\n优化训练配置:")
+    print("\nGPU常驻训练配置:")
     for key, value in training_config.items():
         print(f"- {key}: {value}")
     
-    print("\\n开始优化训练...")
-    model = optimized_train_model(
+    print("\n开始GPU常驻训练...")
+    model = gpu_resident_train_model(
         model, train_set, val_set, device, **training_config
     )
     
-    print("\\n在测试集上评估...")
-    acc_k, mrr = evaluate_model(model, test_set, device)
+    print("\n在测试集上评估...")
+    acc_k, mrr = gpu_resident_evaluate_model(
+        model, test_set, device, 
+        bert_model_name=training_config['bert_model_name'],
+        batch_size=training_config['batch_size']
+    )
     
-    print("\\n=== 最终测试结果 ===")
+    print("\n=== 最终测试结果 ===")
     print(f"Test MRR: {mrr:.4f}")
     for k in [1, 5, 10]:
         print(f"Test Acc@{k}: {acc_k[k]:.3f}")
@@ -83,8 +86,8 @@ def main():
         'num_classes': num_classes,
         'grid2idx': grid2idx,
         'config': training_config
-    }, 'optimized_model.pth')
-    print("\\n模型已保存为 optimized_model.pth")
+    }, 'gpu_resident_model.pth')
+    print("\n模型已保存为 gpu_resident_model.pth")
 
 if __name__ == '__main__':
     main()

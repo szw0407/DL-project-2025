@@ -11,7 +11,7 @@ from optimized_dataloader import create_optimized_dataloader
 from optimized_evaluate import optimized_evaluate_model as evaluate_model
 
 def optimized_train_model(model, train_set, val_set, device, num_epochs=40, batch_size=32, 
-                         lr=1e-3, patience=5, use_amp=True, num_workers=4):
+                         lr=1e-3, patience=5, use_amp=True, num_workers=10):
     """
     优化版训练函数
     
