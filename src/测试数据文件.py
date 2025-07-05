@@ -3,7 +3,7 @@ import ast
 from collections import defaultdict
 
 # 读取 train_data.csv 文件
-df_train = pd.read_csv('train_data.csv')
+df_train = pd.read_csv('data/train_data.csv')
 
 # 初始化一个默认字典来存储 grid_id 和 brand_type 的计数
 grid_brand_counts = defaultdict(lambda: defaultdict(int))
@@ -21,8 +21,7 @@ for _, row in df_train.iterrows():
     for grid_id in grid_ids:
         grid_brand_counts[grid_id][brand] += 1
 
-# 读取 grid_coordinates.xlsx 文件
-df_grid = pd.read_excel('grid_coordinates.xlsx', sheet_name='Sheet1')
+df_grid = pd.read_csv('data/grid_coordinates.csv')
 
 # 为每个 brand_type 添加一列，初始化为 0
 for brand in brand_types:
@@ -36,4 +35,6 @@ for grid_id in grid_brand_counts:
             df_grid.loc[df_grid['grid_id'] == grid_id, brand] = count
 
 # 保存更新后的表格到新的 Excel 文件
-df_grid.to_excel('grid_coordinates_updated.xlsx', index=False, sheet_name='Sheet1')
+df_grid.to_csv(
+    "data/grid_coordinates-2.csv", encoding='gbk'
+)
