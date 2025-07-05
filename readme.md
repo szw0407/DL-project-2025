@@ -88,13 +88,13 @@ brand_name,brand_type,longitude_list,latitude_list,grid_id_list
 
 ### 1. 克隆项目
 ```bash
-git clone <repository-url>
+git clone <repository-url> DL
 cd DL
 ```
 
 ### 2. 安装依赖
 ```bash
-pip install torch pandas numpy scikit-learn
+pip install torch pandas numpy scikit-learn pyopenxl 
 ```
 
 ### 3. 准备数据
@@ -105,8 +105,8 @@ pip install torch pandas numpy scikit-learn
 
 ### 4. 运行训练
 ```bash
-cd src
-python main.py
+python3 src/测试数据文件.py
+python3 src/main.py
 ```
 
 ## 使用示例
@@ -162,11 +162,14 @@ trained_model = train_model(
 
 ## 性能指标
 
-模型在测试集上的典型性能：
-- **MRR**: ~0.XX (具体数值取决于数据和参数设置)
-- **Acc@1**: ~XX%
-- **Acc@5**: ~XX%
-- **Acc@10**: ~XX%
+模型在测试集上的典型性能(具体数值取决于数据和参数设置，且有随机因素影响)：
+
+```text
+Test_MRR: 0.3257
+Test_Acc@1: 0.270
+Test_Acc@5: 0.395
+Test_Acc@10: 0.474
+```
 
 ---
 
