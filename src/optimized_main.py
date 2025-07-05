@@ -36,11 +36,11 @@ def main():
         num_classes=num_classes,
         embed_dim=32,
         lstm_hidden=64,
-        lstm_layers=1,
+        lstm_layers=2,
         coord_out_dim=16,
         poi_out_dim=16,
         brand_out_dim=64,
-        fusion_dim=128,  # 增大融合维度
+        fusion_dim=72,  # 增大融合维度
         dropout=0.1,
         freeze_bert=False  # 可以尝试设置为True来减少显存使用
     )
@@ -51,8 +51,8 @@ def main():
     
     # 优化训练配置 - GPU常驻模式
     training_config = {
-        'num_epochs': 40,
-        'batch_size': 64,  # GPU常驻模式可以使用更大的batch_size
+        'num_epochs': 400,
+        'batch_size': 128,  # GPU常驻模式可以使用更大的batch_size
         'lr': 2e-5,  # BERT建议使用较小的学习率
         'patience': 5,
         'use_amp': True,  # 混合精度训练
