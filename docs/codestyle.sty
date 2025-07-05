@@ -1,0 +1,63 @@
+% codestyle.sty - 代码样式定义文件
+
+\ProvidesPackage{codestyle}
+
+% 设置代码显示样式
+\usepackage{listings}
+\usepackage{xcolor}
+
+% 定义颜色
+\definecolor{codegreen}{rgb}{0,0.6,0}
+\definecolor{codegray}{rgb}{0.5,0.5,0.5}
+\definecolor{codepurple}{rgb}{0.58,0,0.82}
+\definecolor{backcolour}{rgb}{0.95,0.95,0.92}
+
+% Python代码样式
+\lstdefinestyle{pythonstyle}{
+    backgroundcolor=\color{backcolour},   
+    commentstyle=\color{codegreen},
+    keywordstyle=\color{magenta},
+    numberstyle=\tiny\color{codegray},
+    stringstyle=\color{codepurple},
+    basicstyle=\ttfamily\footnotesize,
+    breakatwhitespace=false,         
+    breaklines=true,                 
+    captionpos=b,                    
+    keepspaces=true,                 
+    numbers=left,                    
+    numbersep=5pt,                  
+    showspaces=false,                
+    showstringspaces=false,
+    showtabs=false,                  
+    tabsize=4,
+    frame=single,
+    frameround=tttt,
+    framexleftmargin=3mm,
+    framexrightmargin=3mm,
+    framextopmargin=3mm,
+    framexbottommargin=3mm
+}
+
+% CSV数据样式
+\lstdefinestyle{csvstyle}{
+    backgroundcolor=\color{backcolour},   
+    basicstyle=\ttfamily\tiny,
+    breaklines=true,                 
+    captionpos=b,                    
+    keepspaces=true,                 
+    showspaces=false,                
+    showstringspaces=false,
+    frame=single,
+    frameround=tttt,
+    framexleftmargin=3mm,
+    framexrightmargin=3mm,
+    framextopmargin=3mm,
+    framexbottommargin=3mm
+}
+
+\lstset{style=pythonstyle}
+
+% 定义新的环境用于引用数据文件
+\newcommand{\inputdatafile}[3]{
+    \lstinputlisting[style=csvstyle, caption={#2}, label={#3}, firstline=1, lastline=10]{#1}
+}

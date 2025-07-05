@@ -28,12 +28,7 @@
 \usepackage{listings}
 \usepackage{float} % 添加 float 宏包
 \usepackage{keywords} % 引入关键词环境定义
-
-\lstset{
-      basicstyle=\ttfamily, % Use a monospaced font, similar to \verb
-      breaklines=true,      % Allow automatic line breaking
-      breakatwhitespace=false % Allow breaking anywhere, not just at spaces
-}
+\usepackage{codestyle} % 引入代码样式定义
 
 % 中文标签设置
 \renewcommand{\abstractname}{摘要}
@@ -63,6 +58,108 @@
 \newpage
 \section{引言}
 
+随着移动互联网和位置服务技术的快速发展，基于位置的服务（Location-Based Services, LBS）已成为现代数字生活的重要组成部分。从商户分布分析到用户行为预测，空间位置数据的智能分析对于理解人类活动模式、优化商业布局和提升服务质量具有重要意义。
 
+传统的空间位置预测方法主要依赖于统计学方法和简单的机器学习算法，这些方法往往难以充分捕获位置序列中的复杂时空依赖关系。近年来，深度学习技术在序列建模方面取得了显著进展，为解决空间位置预测问题提供了新的思路。特别是循环神经网络（RNN）及其变体长短期记忆网络（LSTM）在处理序列数据方面表现出色，能够有效学习时间序列中的长期依赖关系。
+
+本项目针对商户品牌的位置预测问题，提出了一种基于深度学习的网格位置预测系统。该系统的核心创新在于构建了一个多模态神经网络模型，该模型不仅考虑了品牌的历史访问网格序列信息，还融合了地理空间坐标特征和兴趣点（Point of Interest, POI）特征。具体而言，系统采用LSTM网络对网格访问序列进行编码，同时使用多层感知机（MLP）分别对空间坐标和POI特征进行编码，最后通过特征融合层将多种信息整合，实现对下一个最可能访问网格位置的准确预测。
+
+本项目使用PyTorch深度学习框架实现，支持GPU加速训练，并集成了早停机制以防止过拟合。系统采用端到端的训练方式，从原始的品牌位置数据到最终的预测结果，整个流程完全自动化。实验结果表明，该多模态融合方法相比传统方法在预测准确率和平均倒数排名（Mean Reciprocal Rank, MRR）等指标上都有显著提升。
+
+本报告将详细介绍该深度学习位置预测系统的设计思路、模型架构、实现细节以及实验结果分析，为相关领域的研究和应用提供参考。完整的项目代码和数据集可通过GitHub仓库获取：\url{https://github.com/szw0407/DL-project-2025}。
+
+\section{技术背景与相关工作}
+
+\subsection{深度学习在序列建模中的应用}
+长短期记忆网络（LSTM）作为循环神经网络的改进版本，通过引入门控机制有效解决了传统RNN的梯度消失问题。在位置预测任务中，LSTM能够捕获用户或品牌的长期移动模式，为准确预测下一个访问位置提供基础。
+
+\subsection{多模态学习}
+多模态学习旨在整合来自不同源的信息，在位置预测任务中，我们需要同时考虑：
+\begin{itemize}
+    \item \textbf{序列信息}：历史访问的网格ID序列
+    \item \textbf{空间信息}：地理坐标特征
+    \item \textbf{上下文信息}：兴趣点（POI）特征
+\end{itemize}
+
+\subsection{网格化空间表示}
+为了将连续的地理空间离散化，本项目采用网格化表示方法，将研究区域划分为若干个网格单元，每个网格具有唯一的ID和相应的POI特征。
+
+\section{系统架构与技术实现}
+
+\subsection{整体架构}
+本系统采用多模态深度学习架构，主要包含以下几个核心组件：
+\begin{itemize}
+    \item \textbf{序列编码器（SeqEncoder）}：基于LSTM的序列建模模块，用于编码网格访问序列
+    \item \textbf{多层感知机编码器（MLPEncoder）}：用于编码空间坐标和POI特征
+    \item \textbf{特征融合层}：将多种模态特征进行融合
+    \item \textbf{分类器}：输出下一个网格位置的概率分布
+\end{itemize}
+
+\subsection{数据集描述}
+本项目使用的数据集包含品牌商户的地理位置信息，主要特征包括：
+\begin{itemize}
+    \item 品牌名称和类型
+    \item 经纬度坐标序列
+    \item 网格ID序列
+    \item POI（兴趣点）特征
+\end{itemize}
+
+\subsection{模型训练流程}
+系统采用端到端的训练方式，支持早停机制和GPU加速，训练流程完全自动化。
+
+\appendix
+\section{附录}
+
+\subsection{项目信息}
+\textbf{GitHub仓库地址：} \url{https://github.com/szw0407/DL-project-2025}
+
+\subsection{核心模型代码}
+\subsubsection{神经网络模型实现 (model.py)}
+\lstinputlisting[language=Python, caption={多模态神经网络模型实现}, label={lst:model}]{../src/model.py}
+
+\subsubsection{主程序入口 (main.py)}
+\lstinputlisting[language=Python, caption={主程序实现}, label={lst:main}]{../src/main.py}
+
+\subsubsection{训练逻辑实现 (train.py)}
+\lstinputlisting[language=Python, caption={模型训练实现}, label={lst:train}]{../src/train.py}
+
+\subsubsection{数据预处理模块 (data\_preprocessing.py)}
+\lstinputlisting[language=Python, caption={数据预处理实现}, label={lst:preprocessing}]{../src/data_preprocessing.py}
+
+\subsubsection{数据特征增强 (测试数据文件.py)}
+\lstinputlisting[language=Python, caption={数据特征增强实现}, label={lst:test_data}]{../src/测试数据文件.py}
+
+\subsubsection{模型评估模块 (evaluate.py)}
+\lstinputlisting[language=Python, caption={模型评估实现}, label={lst:evaluate}]{../src/evaluate.py}
+
+\subsection{数据样本展示}
+\subsubsection{训练数据格式}
+以下直接展示训练数据文件的前10行内容：
+\inputdatafile{../data/train_data.csv}{训练数据样本 (train\_data.csv)}{lst:train_data}
+
+\subsubsection{网格坐标映射}
+以下直接展示网格坐标映射文件的前10行内容：
+\inputdatafile{../data/grid_coordinates-2.csv}{网格坐标映射数据 (grid\_coordinates-2.csv)}{lst:grid_data}
+
+\subsubsection{测试数据格式}
+以下直接展示测试数据文件的前10行内容：
+\inputdatafile{../data/test_data.csv}{测试数据样本 (test\_data.csv)}{lst:test_data}
+
+\subsection{完整源代码文件结构}
+
+项目包含以下主要文件：
+
+\begin{itemize}
+    \item \texttt{src/model.py} - 神经网络模型定义
+    \item \texttt{src/main.py} - 主程序入口
+    \item \texttt{src/train.py} - 训练逻辑实现
+    \item \texttt{src/evaluate.py} - 模型评估
+    \item \texttt{src/data\_preprocessing.py} - 数据预处理
+    \item \texttt{data/train\_data.csv} - 训练数据
+    \item \texttt{data/test\_data.csv} - 测试数据
+    \item \texttt{data/grid\_coordinates-2.csv} - 网格坐标映射
+\end{itemize}
+
+详细的代码实现和更多技术细节请参考GitHub仓库：\url{https://github.com/szw0407/DL-project-2025}
 
 \end{document}
