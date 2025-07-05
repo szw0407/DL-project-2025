@@ -1,0 +1,68 @@
+\documentclass{article}
+
+% 中文支持设置
+\usepackage{xeCJK}
+\usepackage{indentfirst} % Add indentfirst package for first paragraph indentation
+\setlength{\parindent}{2em} % Set paragraph indentation to 2em
+\setCJKmainfont[BoldFont=SimHei,ItalicFont=KaiTi,AutoFakeBold=true,BoldItalicFont=SimHei]{SimSun} % 设置中文字体为宋体，粗体使用黑体
+\setCJKsansfont[BoldFont=SimHei]{SimHei} % 设置中文无衬线字体为黑体
+\setCJKmonofont[BoldFont=SimHei]{SimSun} % 设置中文等宽字体
+\newCJKfontfamily\heiti[BoldFont=SimHei]{SimHei} % 设置黑体字体命令
+\newCJKfontfamily\kaishu{KaiTi} % 设置楷体字体命令
+\newCJKfontfamily\fangsong{FangSong} % 设置仿宋字体命令
+\newCJKfontfamily\lishu{LiShu} % 设置隶书字体命令
+
+% 页面设置
+\usepackage[a4paper,top=2cm,bottom=2cm,left=3cm,right=3cm,marginparwidth=1.75cm]{geometry}
+
+% 有用的包
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{graphicx}
+\usepackage{longtable}
+\usepackage{array}
+\usepackage{booktabs}
+\usepackage{xcolor}
+\usepackage{colortbl}
+\usepackage[colorlinks=true, allcolors=blue, unicode]{hyperref} % 添加 unicode 选项
+\usepackage{listings}
+\usepackage{float} % 添加 float 宏包
+\usepackage{keywords} % 引入关键词环境定义
+
+\lstset{
+      basicstyle=\ttfamily, % Use a monospaced font, similar to \verb
+      breaklines=true,      % Allow automatic line breaking
+      breakatwhitespace=false % Allow breaking anywhere, not just at spaces
+}
+
+% 中文标签设置
+\renewcommand{\abstractname}{摘要}
+\renewcommand{\contentsname}{目录}
+\renewcommand{\listfigurename}{插图目录}
+\renewcommand{\listtablename}{表格目录}
+\renewcommand{\refname}{参考文献}
+\renewcommand{\indexname}{索引}
+\renewcommand{\figurename}{图}
+\renewcommand{\tablename}{表}
+\renewcommand{\appendixname}{附录}
+
+\title{深度学习报告}
+
+\usepackage{hyperref}
+\begin{document}
+\maketitle
+
+\begin{abstract}
+      TODO: 稍后补充
+\end{abstract}
+
+\newpage
+% 目录
+
+\tableofcontents
+\newpage
+\section{引言}
+
+
+
+\end{document}
