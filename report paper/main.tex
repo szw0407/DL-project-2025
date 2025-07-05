@@ -12,7 +12,7 @@
 \setmonofont{Consolas}[Scale=0.85] % 设置等宽字体，支持Unicode字符
 
 % 设置中文字体
-\setCJKmainfont{SimSun} % 设置正文字体为宋体（衬线体）
+\setCJKmainfont[BoldFont=SimHei]{SimSun} % 设置正文字体为宋体（衬线体），加粗用黑体
 \setCJKsansfont{SimHei} % 设置无衬线字体为黑体（用于标题）
 \setCJKmonofont{FangSong} % 设置等宽字体为仿宋
 \newCJKfontfamily\songti{SimSun} % 设置宋体字体命令
@@ -23,8 +23,8 @@
 
 % 页面设置
 \usepackage[a4paper,top=2cm,bottom=2cm,left=3cm,right=3cm,marginparwidth=1.75cm]{geometry}
-
-% 有用的包
+\usepackage{algorithm}
+\usepackage{algpseudocode} 
 \usepackage{amsmath}
 \usepackage{amssymb}
 \usepackage{graphicx}
@@ -33,6 +33,8 @@
 \usepackage{booktabs}
 \usepackage{xcolor}
 \usepackage{colortbl}
+\usepackage{tikz}
+\usetikzlibrary{shapes.geometric, arrows, calc, positioning, fit, backgrounds, matrix}
 \usepackage[unicode]{hyperref}
 \usepackage{listings}
 \usepackage{float} % 添加 float 宏包
@@ -76,17 +78,200 @@
 
 项目提供了多种基线（Baseline）模型或方法，包括简单模型和深度模型。在项目文档中，对比了多个基线方案的实验结果，展示了不同方法在选址预测任务中的表现，作为模型实现方案的参考和对比。
 
-随机猜测（Random guess）方法，将所有未出现过的网格作为候选集，随机选取若干作为预测结果，作为最简单的基线\cite{Dietterich1998Approximate}。一般认为，一个模型至少有一点作用，就可以将它和随机猜测进行对比，如果这个模型居然结果还不如随机猜测，那么这个模型就没有意义了，一定存在很明显的缺陷，比如严重的过拟合、特征选择不当、数据标签出现错误、数据分布出现重大偏差等\cite{Domingos2012MLthingstoknow}。
+\subsection{基线}
 
-随着空间数据挖掘的发展，基于Word2vec的嵌入方法被用到选址任务中\cite{word2vec}。这种方法，虽然最初被用于自然语言处理，但是其本质是一种时序性的序列预测方法\cite{mohan_link_2021}，因此也可以被利用在这个任务中。该方法通过skip-gram模型训练每个网格的embedding，测试时将品牌历史网格序列的embedding取平均，计算与候选网格embedding的相似度（如点积、余弦相似度等），并据此排序预测结果。
+随机猜测（Random guess）方法，将所有未出现过的网格作为候选集，随机选取若干作为预测结果\cite{Dietterich1998Approximate}。作为最简单的基线，这种方法严格意义上并不能算是预测模型，因为它没有任何的学习过程或者学习的能力，而仅能给出一个最多也只是基本符合数据整体统计分布的结果。
 
-深度学习方法方面，LSTM+MLP结构利用嵌入层将输入网格序列编码为向量，随后通过LSTM捕捉序列中的时序依赖，最后通过多层感知机（MLP）进行分类预测。Transformer+MLP则用Transformer替代LSTM，利用自注意力机制更好地建模序列中各网格之间的复杂关系。进一步地，基于注意力融合和对比学习的方法，通过对输入序列进行self-attention，获得全局语义表达，并采用InfoNCE损失进行正负样本的对比训练，有效提升了模型的判别能力和泛化性能。
+一般认为，一个模型至少有一点作用，就可以将它和随机猜测进行对比，如果这个模型居然结果还不如随机猜测，那么这个模型就没有意义了，一定存在很明显的缺陷，比如严重的过拟合、特征选择不当、数据标签出现错误、数据分布出现重大偏差等\cite{Domingos2012MLthingstoknow}。
+
+\subsection{深度学习模型方法}
+\subsection{Word2vec}
+
+Word2vec是一种将离散对象映射为连续向量空间的无监督嵌入方法，最初用于自然语言处理。其核心思想是通过上下文预测目标（skip-gram）或通过目标预测上下文（CBOW），使得具有相似上下文的对象在向量空间中距离更近\cite{word2vec}。
+
+通常认为，在复杂任务上，Skip-gram模型通常比CBOW模型表现更好，尤其是在处理大规模数据集时。Skip-gram模型通过预测上下文网格来学习目标网格的嵌入向量，能够捕捉到更丰富的语义信息。可以朴素地理解为，skip-gram试图从很有限的上下文信息中，学习到目标相对复杂的分布规律；作为对比，CBOW则是在很复杂而丰富的上下文中试图学习一个相对简单的目标分布，这在很多需要泛化能力的任务上，可能效果较差\cite{menon_empirical_2020}。因此，下文的原理举例，以及这部分的相关工作，采用的是这种方式。
+
+\paragraph{Skip-gram模型原理}
+给定序列$S = [g_1, g_2, ..., g_T]$，skip-gram的目标是最大化目标网格$g_t$在上下文窗口$C$内预测其上下文网格的概率：
+\begin{equation}
+\mathcal{L} = \sum_{t=1}^{T} \sum_{-c \leq j \leq c, j \neq 0} \log P(g_{t+j} | g_t)
+\end{equation}
+其中，$c$为窗口大小，$P(g_{t+j} | g_t)$通常通过softmax建模：
+\begin{equation}
+P(g_O | g_I) = \frac{\exp(\mathbf{v}_{g_O}^\top \mathbf{v}_{g_I})}{\sum_{g=1}^{|V|} \exp(\mathbf{v}_g^\top \mathbf{v}_{g_I})}
+\end{equation}
+其中$\mathbf{v}_{g_I}$和$\mathbf{v}_{g_O}$分别为输入和输出网格的嵌入向量，$|V|$为网格总数。
+
+\begin{algorithm}[H]
+\caption{Word2vec Skip-gram训练流程}
+\begin{algorithmic}[1]
+\State \textbf{输入:} 网格序列$S = [g_1, ..., g_T]$，窗口大小$c$
+\State 初始化嵌入矩阵$\mathbf{V} \in \mathbb{R}^{|V| \times d}$
+\For{每个位置$t$ in $1$ to $T$}
+    \For{每个$j$ in $-c$ to $c$, $j \neq 0$}
+        \State 取中心网格$g_t$和上下文网格$g_{t+j}$
+        \State 计算$P(g_{t+j} | g_t)$
+        \State 根据损失$\mathcal{L}$反向传播，更新$\mathbf{V}$
+    \EndFor
+\EndFor
+\State \Return 训练好的嵌入$\mathbf{V}$
+\end{algorithmic}
+\end{algorithm}
+
+Word2vec嵌入可用于衡量网格间的空间相似性，常见用法为取历史网格序列的平均嵌入，与候选网格嵌入计算余弦相似度进行排序预测。
+
+基于Word2vec的嵌入方法被用到选址任务中。这种方法，虽然最初被用于自然语言处理，但是其本质是一种时序性的序列预测方法\cite{mohan_link_2021}，因此也可以被利用在这个任务中。该方法通过skip-gram模型训练每个网格的embedding，测试时将品牌历史网格序列的embedding取平均，计算与候选网格embedding的相似度（如点积、余弦相似度等），并据此排序预测结果。
+
+\subsubsection{LSTM+MLP}
+
+LSTM（Long Short-Term Memory，长短期记忆网络）是一种特殊的循环神经网络（RNN），能够有效捕捉序列中的长期依赖关系，解决传统RNN在长序列训练中梯度消失或爆炸的问题\cite{hochreiter_long_1997}。
+
+\paragraph{模型结构}
+LSTM单元由输入门（input gate）、遗忘门（forget gate）、输出门（output gate）和细胞状态（cell state）组成。其结构如图\ref{fig:lstm_structure}所示。
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[
+    node distance=1.5cm,
+    auto,
+    >=latex',
+    input/.style={circle, draw, fill=blue!20, minimum size=0.8cm, font=\small},
+    gate/.style={rectangle, draw, fill=purple!20, minimum size=0.8cm, font=\small},
+    state/.style={rectangle, draw, fill=green!20, minimum size=1cm, font=\small},
+    operation/.style={circle, draw, fill=gray!20, minimum size=0.6cm, font=\tiny},
+    arrow/.style={->, thick}
+]
+
+% 输入节点 - 放在门控单元下方
+\node[input] (xt) at (2,-1.5) {$x_t$};
+\node[input] (ht_1) at (4,-1.5) {$h_{t-1}$};
+\node[state] (ct_1) at (-2.5,2.5) {$C_{t-1}$};
+
+% 门控单元 - 等间距排列，文字在内部
+\node[gate, minimum width=1.2cm, minimum height=0.8cm, align=center] (fg) at (1,0.5) {\small 遗忘门\\$f_t$};
+\node[gate, minimum width=1.2cm, minimum height=0.8cm, align=center] (cg) at (3,0.5) {\small 候选值\\$\tilde{C}_t$};
+\node[gate, minimum width=1.2cm, minimum height=0.8cm, align=center] (ig) at (5,0.5) {\small 输入门\\$i_t$};
+\node[gate, minimum width=1.2cm, minimum height=0.8cm, align=center] (og) at (7,0.5) {\small 输出门\\$o_t$};
+
+% 操作节点
+\node[operation] (mult1) at (0,2.5) {$\times$};
+\node[operation] (mult2) at (4,2.5) {$\times$};
+\node[operation] (add) at (2,3.5) {$+$};
+\node[operation] (mult3) at (7,4) {$\times$};
+\node[operation] (tanh_out) at (5,4) {tanh};
+
+% 状态节点
+\node[state] (ct) at (2,4.5) {$C_t$};
+\node[state] (ht) at (7,5) {$h_t$};
+
+% 连接线
+\draw[arrow] (xt) -- (fg);
+\draw[arrow] (xt) -- (cg);
+\draw[arrow] (xt) -- (ig);
+\draw[arrow] (xt) -- (og);
+
+\draw[arrow] (ht_1) -- (fg);
+\draw[arrow] (ht_1) -- (cg);
+\draw[arrow] (ht_1) -- (ig);
+\draw[arrow] (ht_1) -- (og);
+
+\draw[arrow] (ct_1) -- (mult1);
+\draw[arrow] (fg) -- (mult1);
+\draw[arrow] (ig) -- (mult2);
+\draw[arrow] (cg) -- (mult2);
+
+\draw[arrow] (mult1) -- (add);
+\draw[arrow] (mult2) -- (add);
+\draw[arrow] (add) -- (ct);
+
+\draw[arrow] (ct) -- (tanh_out);
+\draw[arrow] (og) -- (mult3);
+\draw[arrow] (tanh_out) -- (mult3);
+\draw[arrow] (mult3) -- (ht);
+
+\end{tikzpicture}
+\caption{LSTM单元结构图}
+\label{fig:lstm_structure}
+\end{figure}
+
+LSTM的核心机制包括三个门控单元和细胞状态：
+
+\begin{itemize}
+\item \textbf{遗忘门}：决定从细胞状态中丢弃什么信息，公式为$f_t = \sigma(W_f \cdot [h_{t-1}, x_t] + b_f)$
+\item \textbf{输入门}：决定什么新信息被存储在细胞状态中，公式为$i_t = \sigma(W_i \cdot [h_{t-1}, x_t] + b_i)$
+\item \textbf{候选值}：创建新的候选值向量，公式为$\tilde{C}_t = \tanh(W_C \cdot [h_{t-1}, x_t] + b_C)$
+\item \textbf{细胞状态更新}：结合遗忘门和输入门的结果，公式为$C_t = f_t * C_{t-1} + i_t * \tilde{C}_t$
+\item \textbf{输出门}：决定细胞状态的哪些部分将输出，公式为$o_t = \sigma(W_o \cdot [h_{t-1}, x_t] + b_o)$
+\item \textbf{隐藏状态}：最终的输出，公式为$h_t = o_t * \tanh(C_t)$
+\end{itemize}
+
+LSTM能够有效捕捉序列中的长期依赖信息，广泛应用于序列建模、时间序列预测、自然语言处理等任务。
+
+深度学习方法方面，LSTM+MLP结构利用嵌入层将输入网格序列编码为向量，随后通过LSTM捕捉序列中的时序依赖\cite{hochreiter_long_1997}，最后通过多层感知机（MLP）进行分类预测。
+
+\subsubsection{Transformer+MLP}
+
+Transformer+MLP则用Transformer替代LSTM，利用自注意力机制更好地建模序列中各网格之间的复杂关系\cite{vaswani_attention_2023}，进一步基于注意力融合和对比学习的方法，通过对输入序列进行self-attention，获得全局语义表达，并采用InfoNCE损失进行正负样本的对比训练，有效提升了模型的判别能力和泛化性能。
+
+\subsection{对比学习}
+
+基于注意力融合的对比学习方法（Attention-based-fusion+对比学习）进一步提升了模型的表达能力。具体而言，首先给定品牌的历史网格序列，将其中一个网格作为ground truth，其余网格作为输入序列。对输入序列中的每个grid进行嵌入（embedding），然后通过自注意力（self-attention）机制对序列进行编码，获得每个位置的上下文表示。将self-attention后的序列embedding取平均，得到该序列的全局表示（anchor embedding）。以ground truth对应的grid embedding作为正样本，将所有未出现在历史序列中的grid中随机选取若干作为负样本，提取其embedding。最终，采用InfoNCE损失函数进行正负样本的对比训练，有效提升了模型对空间选址的判别能力和泛化性能。
+
+\begin{algorithm}[H]
+\caption{基于对比学习的选址预测训练流程}
+\begin{algorithmic}[1]
+\State \textbf{输入:} 品牌历史网格序列 $S = [g_1, ..., g_T]$，所有网格集合 $V$，负样本数量 $K$
+\State 初始化嵌入模型 $\text{embed}(\cdot)$ 和自注意力模型 $\text{SelfAttention}(\cdot)$
+\For{每个训练迭代}
+    \State 从序列 $S$ 中随机选择一个网格 $g_t$ 作为正样本 $g_{pos}$
+    \State 将剩余的网格 $S' = S \setminus \{g_t\}$ 作为输入序列
+    \State 从 $V \setminus S$ 中随机采样 $K$ 个网格作为负样本集 $G_{neg}$
+    
+    \State \Comment{编码输入序列以生成锚点表示}
+    \State 对输入序列 $S'$ 中的每个网格进行嵌入: $E_{S'} = [\text{embed}(g) \text{ for } g \in S']$
+    \State 通过自注意力机制处理嵌入序列: $H = \text{SelfAttention}(E_{S'})$
+    \State 计算锚点嵌入: $\mathbf{v}_{anchor} = \text{mean}(H)$
+    
+    \State \Comment{编码正负样本}
+    \State 编码正样本: $\mathbf{v}_{pos} = \text{embed}(g_{pos})$
+    \State 编码负样本: $\mathbf{V}_{neg} = [\text{embed}(g) \text{ for } g \in G_{neg}]$
+    
+    \State \Comment{计算InfoNCE损失}
+    \State 计算正样本相似度: $s_{pos} = \text{sim}(\mathbf{v}_{anchor}, \mathbf{v}_{pos})$
+    \State 计算负样本相似度: $s_{neg,k} = \text{sim}(\mathbf{v}_{anchor}, \mathbf{v}_{neg,k})$ for $k=1, ..., K$
+    \State 计算损失 $\mathcal{L} = -\log \frac{\exp(s_{pos} / \tau)}{\exp(s_{pos} / \tau) + \sum_{k=1}^{K} \exp(s_{neg,k} / \tau)}$
+    
+    \State \Comment{更新模型参数}
+    \State 根据损失 $\mathcal{L}$ 反向传播，更新模型参数
+\EndFor
+\State \Return 训练好的模型
+\end{algorithmic}
+\end{algorithm}
+
+Baseline 的参考指标如表\ref{tab:baseline_results}所示。
+
+\begin{table}[H]
+\centering
+\begin{tabular}{|c|c|c|c|c|}
+\hline
+\rowcolor[HTML]{D9EAD3}
+\textbf{方法} & \textbf{acc@1} & \textbf{acc@5} & \textbf{acc@10} & \textbf{Mean rank} \\ \hline
+随机猜测 & 0.0165 & 0.0620 & 0.1141 & 0.0373 \\ \hline
+Word2vec & 0.0446 & 0.2625 & 0.3622 & 0.1288 \\ \hline
+LSTM+MLP & 0.0414 & 0.1691 & 0.2790 & 0.0976 \\ \hline
+Transformer+MLP & 0.0525 & 0.1665 & 0.2759 & 0.1027 \\ \hline
+对比学习 & 0.0604 & 0.2296 & 0.3702 & 0.1326 \\ \hline
+\end{tabular}
+\caption{Baseline方法在选址预测任务上的实验结果}
+\label{tab:baseline_results}
+\end{table}
+
 
 上述方法在本项目数据集上的实验结果如表所示。可以看出，深度学习模型（如Transformer+MLP、对比学习方法）在准确率和平均排序等指标上均优于传统方法，尤其是对比学习方法在acc@1和acc@10等指标上表现突出，显示了其在空间选址预测任务中的潜力。此外，模型结构的层级设计（如嵌入层、序列建模层、融合层和输出层）对最终性能有显著影响，合理的结构选择和层级组合能够更好地捕捉空间和序列特征，从而提升预测效果。
 
-% TODO：这部分内容后面重写
-
 \section{方法探索}
+
+实验的目标是优化模型结构，使之表现优于基线模型。通过对比不同的模型架构和特征处理方法，探索最优的选址预测方案。因此，考虑到数据集的特点和任务需求，我们设计了一个多模态融合的神经网络架构，该架构能够同时处理和融合三种不同类型的信息：序列特征、空间特征和环境特征。我们通过对数据进行预处理和增加有关特征的方式，添加了序列和环境特征，此外充分利用深度模型的各种特性，对其和空间特征共同编码处理，从而实现对品牌选址的更加精准的预测。
 
 \subsection{数据预处理}
 
@@ -162,16 +347,24 @@ density\_score_i = \frac{1}{K}\sum_{j=1}^{K} d(grid_i, neighbor_j)
 
 \subsubsection{滑动窗口样本生成}
 
-为了最大化利用有限的训练数据，我们采用滑动窗口方法从每个品牌的店铺序列中生成多个训练样本。例如，对于序列[A,B,C,D]，我们生成以下样本：
-\begin{itemize}
-\item 已有[A]，预测B
-\item 已有[A,B]，预测C  
-\item 已有[A,B,C]，预测D
-\end{itemize}
+为了最大化利用有限的训练数据，我们采用滑动窗口方法从每个品牌的店铺序列中生成多个训练样本。例如，对于序列[A,B,C,D]，我们使用以下算法产生样本：
+
+\begin{algorithm}
+\caption{滑动窗口样本生成算法}
+\begin{algorithmic}[1]
+\State \textbf{输入:} 序列 $S = [A, B, C, D]$, 窗口大小 $w = 3$
+\State \textbf{输出:} 样本集 $Samples$
+\State $Samples \gets []$
+\For{$i = 0$ to $len(S) - w$}
+    \State $sample \gets S[i:i+w]$
+    \State $Samples.append(sample)$
+\EndFor
+\State \Return $Samples$
+\end{algorithmic}
+\end{algorithm}
 
 这种处理方法不仅增加了训练样本数量，还使模型能够学习不同长度序列的预测模式，更好地模拟品牌实际扩张过程中的决策链。
 
-% TODO: 用户可在此补充更多数据预处理的尝试和优化
 
 \subsection{对于标签的处理尝试}
 
@@ -225,16 +418,23 @@ f_{fused} = MLP_{fusion}(concat(f_{seq}, f_{coord}, f_{poi}))
 
 % TODO: 用户可在此补充模型设计的其他尝试，如不同架构的对比、超参数调优等
 
+\addcontentsline{toc}{section}{\refname}
 \bibliographystyle{IEEEtran}
 \bibliography{sample}
-
+\newpage
 \appendix
-\section{附录}
+\section*{\appendixname}
+\addcontentsline{toc}{section}{\appendixname}
+\section{项目代码实现}
 
-\subsection{项目信息}
 \textbf{GitHub仓库地址：} \url{https://github.com/szw0407/DL-project-2025}
 
 \subsection{核心模型代码}
+
+此部分的代码中注释有一部分是由AI生成的，旨在更清晰地展示思路，体现模型的结构和各个组件的功能。
+
+主体代码实现分为多个模块，主要包括神经网络模型实现、主程序入口、训练逻辑实现、数据预处理模块、数据特征增强和模型评估模块等。
+
 \subsubsection{神经网络模型实现 (model.py)}
 \lstinputlisting[language=Python, caption={多模态神经网络模型实现}, label={lst:model}]{../src/model.py}
 
