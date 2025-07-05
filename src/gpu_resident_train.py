@@ -8,9 +8,8 @@ import numpy as np
 from torch.amp.grad_scaler import GradScaler
 from torch.amp.autocast_mode import autocast
 from gpu_resident_dataloader import create_gpu_resident_dataloader, check_gpu_memory_usage
-from optimized_evaluate import optimized_evaluate_model as evaluate_model
 
-def gpu_resident_train_model(model, train_set, val_set, device, num_epochs=40, batch_size=32, 
+def gpu_resident_train_model(model, train_set, val_set, device, num_epochs=400, batch_size=32, 
                            lr=1e-3, patience=5, use_amp=True, bert_model_name='bert-base-chinese'):
     """
     GPU常驻训练函数 - 所有数据预先加载到GPU
