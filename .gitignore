@@ -162,4 +162,4 @@ cython_debug/
 #.idea/
 .vscode/settings.json
 store_predictor_best_training_plot.svg
-store_predictor_best.pth
+*.pth
