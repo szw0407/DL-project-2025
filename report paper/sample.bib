@@ -122,6 +122,9 @@
 }
 
 @article{menon_empirical_2020,
+year     = {2020},
+  publisher = {Portland State University},
+  journal = {Honors Thesis},
   title    = {Empirical Analysis of {CBOW} and Skip Gram {NLP} Models},
   url      = {https://www.academia.edu/69492807/Empirical_Analysis_of_CBOW_and_Skip_Gram_NLP_Models},
   doi      = {10.15760/HONORS.956},
@@ -129,5 +132,120 @@
   author   = {Menon, Tejas},
   urldate  = {2025-07-05},
   date     = {2020-01-01},
-  file     = {全文:C\:\\Users\\vson\\Zotero\\storage\\GSI6P7YR\\Menon - 2020 - Empirical Analysis of CBOW and Skip Gram NLP Models.pdf:application/pdf;Snapshot:C\:\\Users\\vson\\Zotero\\storage\\KNPB4KWN\\Empirical_Analysis_of_CBOW_and_Skip_Gram_NLP_Models.html:text/html}
+}
+@inproceedings{devlin-etal-2019-bert,
+  title     = {{BERT}: Pre-training of Deep Bidirectional Transformers for Language Understanding},
+  author    = {Devlin, Jacob  and
+               Chang, Ming-Wei  and
+               Lee, Kenton  and
+               Toutanova, Kristina},
+  editor    = {Burstein, Jill  and
+               Doran, Christy  and
+               Solorio, Thamar},
+  booktitle = {Proceedings of the 2019 Conference of the North {A}merican Chapter of the Association for Computational Linguistics: Human Language Technologies, Volume 1 (Long and Short Papers)},
+  month     = jun,
+  year      = {2019},
+  address   = {Minneapolis, Minnesota},
+  publisher = {Association for Computational Linguistics},
+  url       = {https://aclanthology.org/N19-1423/},
+  doi       = {10.18653/v1/N19-1423},
+  pages     = {4171--4186},
+  abstract  = {We introduce a new language representation model called BERT, which stands for Bidirectional Encoder Representations from Transformers. Unlike recent language representation models (Peters et al., 2018a; Radford et al., 2018), BERT is designed to pre-train deep bidirectional representations from unlabeled text by jointly conditioning on both left and right context in all layers. As a result, the pre-trained BERT model can be fine-tuned with just one additional output layer to create state-of-the-art models for a wide range of tasks, such as question answering and language inference, without substantial task-specific architecture modifications. BERT is conceptually simple and empirically powerful. It obtains new state-of-the-art results on eleven natural language processing tasks, including pushing the GLUE score to 80.5 (7.7 point absolute improvement), MultiNLI accuracy to 86.7{\%} (4.6{\%} absolute improvement), SQuAD v1.1 question answering Test F1 to 93.2 (1.5 point absolute improvement) and SQuAD v2.0 Test F1 to 83.1 (5.1 point absolute improvement).}
+}
+
+
+@inproceedings{chen_simple_2020,
+  title     = {A Simple Framework for Contrastive Learning of Visual Representations},
+  author    = {Chen, Ting and Kornblith, Simon and Norouzi, Mohammad and Hinton, Geoffrey},
+  booktitle = {Proceedings of the 37th International Conference on Machine Learning},
+  pages     = {1597--1607},
+  year      = {2020},
+  editor    = {III, Hal Daumé and Singh, Aarti},
+  volume    = {119},
+  series    = {Proceedings of Machine Learning Research},
+  month     = {13--18 Jul},
+  publisher = {PMLR},
+  pdf       = {http://proceedings.mlr.press/v119/chen20j/chen20j.pdf},
+  url       = {https://proceedings.mlr.press/v119/chen20j.html},
+  abstract  = {This paper presents SimCLR: a simple framework for contrastive learning of visual representations. We simplify recently proposed contrastive self-supervised learning algorithms without requiring specialized architectures or a memory bank. In order to understand what enables the contrastive prediction tasks to learn useful representations, we systematically study the major components of our framework. We show that (1) composition of data augmentations plays a critical role in defining effective predictive tasks, (2) introducing a learnable nonlinear transformation between the representation and the contrastive loss substantially improves the quality of the learned representations, and (3) contrastive learning benefits from larger batch sizes and more training steps compared to supervised learning. By combining these findings, we are able to considerably outperform previous methods for self-supervised and semi-supervised learning on ImageNet. A linear classifier trained on self-supervised representations learned by SimCLR achieves 76.5% top-1 accuracy, which is a 7% relative improvement over previous state-of-the-art, matching the performance of a supervised ResNet-50. When fine-tuned on only 1% of the labels, we achieve 85.8% top-5 accuracy, outperforming AlexNet with 100X fewer labels.}
+}
+
+@misc{oord_representation_2018,
+      title={Representation Learning with Contrastive Predictive Coding}, 
+      author={Aaron van den Oord and Yazhe Li and Oriol Vinyals},
+      year={2019},
+      eprint={1807.03748},
+      archivePrefix={arXiv},
+      primaryClass={cs.LG},
+      url={https://arxiv.org/abs/1807.03748}, }
+
+@inproceedings{micikevicius_mixed_2018,
+  title     = {Mixed Precision Training},
+  author    = {Micikevicius, Paulius and Narang, Sharan and Alben, Jonah and Diamos, Gregory and Elsen, Erich and Garcia, David and Ginsburg, Boris and Houston, Michael and Kuchaiev, Oleksii and Venkatesh, Ganesh and Wu, Hao},
+  booktitle = {International Conference on Learning Representations},
+  year      = {2018},
+  url       = {https://openreview.net/forum?id=r1gs9JgRZ},
+  abstract  = {Deep neural networks have enabled progress in a wide variety of applications. Growing the size of the neural network typically results in improved accuracy. As model sizes grow, the memory and compute requirements for training these models also increases. We introduce a technique to train deep neural networks using half precision floating point numbers. In our technique, weights, activations and gradients are stored in IEEE half-precision format. Half-precision floating numbers have limited numerical range compared to single-precision numbers. We propose two techniques to handle this loss of information. Firstly, we recommend maintaining a single-precision copy of the weights that accumulates the gradients after each optimizer step. This single-precision copy is rounded to half-precision format during training. Secondly, we propose scaling the loss appropriately to handle the loss of information with half-precision gradients. We demonstrate that this approach works for a wide variety of models including convolution neural networks, recurrent neural networks and generative adversarial networks. This technique works for large scale models with more than 100 million parameters trained on large datasets. Using this approach, we can reduce the memory consumption of deep learning models by nearly 2x. In future processors, we can also expect a significant computation speedup using half-precision hardware units.}
+}
+
+@article{bishop_training_1995,
+  title   = {Training with noise is equivalent to Tikhonov regularization},
+  author  = {Bishop, Christopher M.},
+  journal = {Neural computation},
+  volume  = {7},
+  number  = {1},
+  pages   = {108--116},
+  year    = {1995},
+  publisher = {MIT Press},
+  doi     = {10.1162/neco.1995.7.1.108},
+  abstract = {It is shown that training a neural network by minimizing a sum-of-squares error function, subject to Gaussian noise on the input variables, is equivalent to training on a regularized error function. The regularization terms take the form of an additional penalty term which is quadratic in the derivatives of the network mapping function. This gives an alternative perspective on the beneficial effects of noise during training and leads to a training algorithm for regularized networks which uses second derivative information.}
+}
+
+@inproceedings{zhang_mixup_2018,
+  title     = {mixup: Beyond empirical risk minimization},
+  author    = {Zhang, Hongyi and Cisse, Moustapha and Dauphin, Yann N. and Lopez-Paz, David},
+  booktitle = {International Conference on Learning Representations},
+  year      = {2018},
+  url       = {https://openreview.net/forum?id=r1Ddp1-Rb},
+  abstract  = {Large deep neural networks are powerful, but exhibit undesirable behaviors such as memorization and sensitivity to adversarial examples. In this work, we propose mixup, a simple learning principle to alleviate these issues. In essence, mixup trains a neural network on convex combinations of pairs of examples and their labels. By doing so, mixup regularizes the neural network to favor simpler linear behavior in-between training examples. Our experiments on the ImageNet-2012, CIFAR-10, CIFAR-100, Google commands and UCI datasets show that mixup improves the generalization of state-of-the-art neural network architectures. We also find that mixup reduces the memorization of corrupt labels, increases the robustness to adversarial examples, and stabilizes the training of generative adversarial networks.}
+}
+
+@article{chawla_smote_2002,
+  title   = {SMOTE: synthetic minority oversampling technique},
+  author  = {Chawla, Nitesh V. and Bowyer, Kevin W. and Hall, Lawrence O. and Kegelmeyer, W. Philip},
+  journal = {Journal of artificial intelligence research},
+  volume  = {16},
+  pages   = {321--357},
+  year    = {2002},
+  doi     = {10.1613/jair.953},
+  abstract = {An approach to the construction of classifiers from imbalanced datasets is described. A dataset is imbalanced if the classification categories are not approximately equally represented. Often real-world data sets are predominately composed of "normal" examples with only a small percentage of "abnormal" or "interesting" examples. It is also the case that the cost of misclassifying an abnormal (interesting) example as a normal example is often much higher than the cost of the reverse error. Under-sampling of the majority (normal) class has been proposed as a good means of increasing the sensitivity of a classifier to the minority class. This paper shows that a combination of our method of over-sampling the minority (abnormal) class and under-sampling the majority (normal) class can achieve better classifier performance (in ROC space) than only under-sampling the majority class. This paper also shows that a combination of our method of over-sampling the minority (abnormal) class and under-sampling the majority (normal) class can achieve better classifier performance (in the ROC space) than varying the loss ratios in Ripper or class priors in Naive Bayes. Our method of over-sampling the minority class involves creating synthetic minority class examples. Experiments are performed using C4.5, Ripper and a Naive Bayes classifier. The method is evaluated using the area under the Receiver Operating Characteristic curve (AUC) and the ROC convex hull strategy.}
+}
+
+@book{jolliffe_principal_2016,
+  title     = {Principal component analysis},
+  author    = {Jolliffe, Ian T. and Cadima, Jorge},
+  year      = {2016},
+  publisher = {Springer},
+  edition   = {3rd},
+  doi       = {10.1007/978-1-4757-1904-8},
+  abstract  = {Principal component analysis (PCA) is a technique for reducing the dimensionality of such datasets, increasing interpretability but at the same time minimizing information loss. It does so by creating new uncorrelated variables that successively maximize variance. Finding such new variables, the principal components, reduces to solving an eigenvalue/eigenvector problem, and the new variables are defined by the dataset at hand, not a priori.}
+}
+
+@article{kingma_adam_2015,
+  title   = {Adam: A Method for Stochastic Optimization},
+  author  = {Kingma, Diederik P. and Ba, Jimmy},
+  journal = {arXiv preprint arXiv:1412.6980},
+  year    = {2015},
+  url     = {https://arxiv.org/abs/1412.6980},
+  doi     = {10.48550/arXiv.1412.6980},
+  abstract = {We introduce Adam, an algorithm for first-order gradient-based optimization of stochastic objective functions, based on adaptive estimates of lower-order moments. The method is straightforward to implement, is computationally efficient, has little memory requirements, is invariant to diagonal rescaling of the gradients, and is well suited for problems that are large in terms of data and/or parameters. The method is also appropriate for non-stationary objectives and problems with very noisy and/or sparse gradients. The hyper-parameters have intuitive interpretations and typically require little tuning. We provide a regret bound on the convergence rate that is comparable to the best known results under the online convex optimization setting. Empirical results demonstrate that Adam works well in practice and compares favorably to other stochastic optimization methods. Finally, we discuss AdaMax, a variant of Adam based on the infinity norm.}
+}
+
+@inproceedings{loshchilov_decoupled_2019,
+  title     = {Decoupled Weight Decay Regularization},
+  author    = {Loshchilov, Ilya and Hutter, Frank},
+  booktitle = {International Conference on Learning Representations},
+  year      = {2019},
+  url       = {https://openreview.net/forum?id=Bkg6RiCqY7},
+  abstract  = {L2 regularization and weight decay regularization are equivalent for standard stochastic gradient descent (when rescaled by the learning rate), but as we demonstrate this is \textit{not} the case for adaptive gradient algorithms, such as Adam. While common implementations of these algorithms employ L2 regularization (often calling it "weight decay" in what may be misleading due to the inequivalence we expose), we propose a simple modification to recover the original formulation of weight decay regularization by \textit{decoupling} the weight decay from the gradient-based update. We provide empirical evidence that our proposed modification (i) decouples the optimal choice of weight decay factor from the setting of the learning rate for both standard SGD and Adam and (ii) substantially improves Adam's generalization performance, allowing it to compete with SGD with momentum on image classification datasets (on which it was previously typically outperformed by the latter). Our proposed decoupled weight decay has already been adopted by many researchers, and the community has implemented it in TensorFlow and PyTorch; our empirical evaluation shows that it improves performance across a variety of tasks.}
 }
