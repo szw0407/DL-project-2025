@@ -928,6 +928,17 @@ POI（兴趣点）特征为模型提供了丰富的环境语义信息：
 \item \textbf{信息整合}：将序列、空间、环境等特征整合
 \end{enumerate}
 
+\subsubsection{与基线方法的比较优势}
+
+相比各种基线方法，我们的模型优势明显：
+
+\begin{enumerate}
+\item \textbf{vs 随机猜测}：体现了机器学习方法的有效性
+\item \textbf{vs Word2vec}：深度模型在复杂模式识别方面的优势，尤其是LSTM对于时序数据的处理能力
+\item \textbf{vs LSTM+MLP}：多模态融合相比单一序列建模的优越性，能够同时捕捉时序、空间和环境信息
+\item \textbf{vs Transformer+MLP和对比学习}：针对特定任务的架构设计胜过通用架构，以及简单模型在小数据集上收敛快、拟合程度高的优势
+\end{enumerate}
+
 \subsection{模型局限性}
 
 我们认为目前该模型还存在的一些局限：
