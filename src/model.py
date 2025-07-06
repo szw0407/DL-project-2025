@@ -1,162 +1,204 @@
+"""
+商业选址预测模型
+
+整体模型架构:
+┌──────────────────────────────────────────────────────────────┐
+│                    NextGridPredictor                         │
+└──────────────────────────────────────────────────────────────┘
+            │                 │                 │
+            ▼                 ▼                 ▼
+┌──────────────┐   ┌──────────────┐   ┌──────────────┐
+│ SeqEncoder   │   │ CoordEncoder │   │ POIEncoder   │
+│ (LSTM-based) │   │  (MLP-based) │   │  (MLP-based) │
+└──────────────┘   └──────────────┘   └──────────────┘
+            │                 │                 │
+            └─────────────────┼─────────────────┘
+                              │
+                              ▼
+                    ┌──────────────────┐
+                    │   Fusion Layer   │
+                    │     (MLP with    │
+                    │     Dropout)     │
+                    └──────────────────┘
+                              │
+                              ▼
+                    ┌──────────────────┐
+                    │    Classifier    │
+                    │  (Linear Layer)  │
+                    └──────────────────┘
+                              │
+                              ▼
+                    预测下一个网格的概率分布
+
+该模型采用多模态融合架构，综合利用三种信息进行商业选址预测:
+1. 历史选址序列信息 (通过LSTM编码)
+2. 地理坐标信息 (通过MLP编码)
+3. 兴趣点(POI)特征信息 (通过MLP编码)
+
+这三种信息经过各自的编码器处理后，在特征层面融合，
+再通过多层感知机进行进一步特征提取，最终用于预测下一个最佳选址位置。
+"""
 import torch
 import torch.nn as nn
 
-
-class StorePredictionModel(nn.Module):
-    def __init__(self, num_classes, embed_dim=32, coord_dim=8, lstm_hidden=64, lstm_layers=1, dropout=0.1):
+class SeqEncoder(nn.Module):
+    """
+    序列编码器：用于编码历史选址序列的特征
+    
+    该编码器首先将网格ID映射到低维嵌入空间，然后通过LSTM网络捕获序列中的
+    时序依赖关系和选址模式。使用LSTM的优势在于能够记忆长期依赖，
+    适合捕捉商业选址中的空间扩张规律。
+    
+    架构:
+    输入序列 → 嵌入层 → LSTM → 最后时刻的隐藏状态
+    
+    参数:
+        vocab_size: 词汇表大小，即网格总数
+        embed_dim: 嵌入维度
+        lstm_hidden: LSTM隐藏层维度
+        lstm_layers: LSTM层数
+        dropout: Dropout比率，用于防止过拟合
+    """
+    def __init__(self, vocab_size, embed_dim, lstm_hidden, lstm_layers, dropout):
+        super().__init__()
+        self.embed = nn.Embedding(vocab_size, embed_dim)
+        self.lstm = nn.LSTM(embed_dim, lstm_hidden, lstm_layers,
+                            batch_first=True, dropout=dropout if lstm_layers > 1 else 0)
+                            
+    def forward(self, seq_ids):
         """
-        门店选址预测模型。
-
+        前向传播
+        
         参数:
-        num_classes (int): 网格类别的总数。
-        embed_dim (int): 网格ID嵌入的维度。
-        coord_dim (int): 坐标嵌入的维度。如果为0，则不使用坐标嵌入。
-        lstm_hidden (int): LSTM隐藏层的维度。
-        lstm_layers (int): LSTM的层数。
-        dropout (float): Dropout的比例。
-        """
-        super(StorePredictionModel, self).__init__()
-
-        self.num_classes = num_classes
-        self.embed_dim = embed_dim
-        self.coord_dim = coord_dim
-        self.lstm_hidden = lstm_hidden
-
-        # 网格ID嵌入层：将每个grid索引映射为embed_dim维向量
-        self.id_embedding = nn.Embedding(num_classes, embed_dim)
-
-        # 坐标嵌入：将2维坐标映射为coord_dim维向量
-        # 只有当coord_dim > 0 时才创建此层
-        if self.coord_dim > 0:
-            self.coord_embedding_layer = nn.Linear(2, coord_dim)
-        else:
-            self.coord_embedding_layer = None
-
-        # LSTM层：输入维度为 embed_dim + coord_dim (如果使用坐标嵌入)
-        current_input_dim = embed_dim
-        if self.coord_embedding_layer is not None:
-            current_input_dim += coord_dim
-
-        self.lstm = nn.LSTM(current_input_dim, lstm_hidden, num_layers=lstm_layers, batch_first=True,
-                            dropout=dropout if lstm_layers > 1 else 0)
-        # 注意: LSTM自带的dropout只在多层时作用于层间，单层时不起作用。
-        # 因此，我们在LSTM输出后再加一个独立的Dropout层。
-
-        # Dropout层
-        self.dropout_layer = nn.Dropout(dropout)
-
-        # 全连接输出层：映射到num_classes维，用于分类预测
-        self.output_fc = nn.Linear(lstm_hidden, num_classes)
-
-    def forward(self, seq_ids, seq_coords=None):
-        """
-        模型的前向传播。
-
-        参数:
-        seq_ids (torch.Tensor): 张量 (batch, seq_len)，每个元素为网格的索引表示。
-        seq_coords (torch.Tensor, optional): 张量 (batch, seq_len, 2)，对应每个网格的坐标。
-                                            如果 coord_embedding_layer 为 None，则此参数被忽略。
-
+            seq_ids: 网格ID序列，形状为(batch_size, seq_len)
+            
         返回:
-        torch.Tensor: logits 张量 (batch, num_classes)。
+            序列的最终表示，形状为(batch_size, lstm_hidden)
         """
-        batch_size, seq_len = seq_ids.shape[:2]
+        emb = self.embed(seq_ids)  # (batch_size, seq_len, embed_dim)
+        out, (h, _) = self.lstm(emb)  # out: (batch_size, seq_len, lstm_hidden)
+        return out[:, -1, :]  # 返回最后一个时间步的输出作为序列表示
 
-        # 1. 获取网格ID嵌入表示 (batch, seq_len, embed_dim)
-        id_emb = self.id_embedding(seq_ids)
+class MLPEncoder(nn.Module):
+    """
+    多层感知机编码器：用于编码坐标和POI特征
+    
+    这是一个简单的两层感知机，通过非线性变换将输入特征映射到固定维度的
+    输出空间。适用于处理非序列性的数值特征，如坐标和POI统计数据。
+    
+    架构:
+    输入特征 → 线性层 → ReLU → 线性层 → ReLU
+    
+    参数:
+        in_dim: 输入特征维度
+        out_dim: 输出特征维度
+        hidden_dim: 隐藏层维度，默认为32
+    """
+    def __init__(self, in_dim, out_dim, hidden_dim=32):
+        super().__init__()
+        self.model = nn.Sequential(
+            nn.Linear(in_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, out_dim),
+            nn.ReLU()
+        )
+        
+    def forward(self, x):
+        """
+        前向传播
+        
+        参数:
+            x: 输入特征，形状为(batch_size, in_dim)
+            
+        返回:
+            编码后的特征，形状为(batch_size, out_dim)
+        """
+        return self.model(x)
 
-        # 初始化LSTM输入为ID嵌入
-        lstm_input = id_emb
-
-        # 2. 如果使用坐标嵌入
-        if self.coord_embedding_layer is not None and seq_coords is not None:
-            # 检查坐标维度是否正确
-            if seq_coords.shape[-1] != 2:
-                raise ValueError(f"坐标张量 seq_coords 的最后一维期望是2 (x,y)，但得到的是 {seq_coords.shape[-1]}")
-
-            # 将坐标转换为向量表示并应用非线性激活
-            # (batch, seq_len, 2) -> (batch * seq_len, 2)
-            coords_flat = seq_coords.reshape(batch_size * seq_len, 2)
-            # (batch * seq_len, 2) -> (batch * seq_len, coord_dim)
-            coord_emb_flat = self.coord_embedding_layer(coords_flat)
-            # 应用激活函数，例如 Tanh
-            coord_emb_activated = torch.tanh(coord_emb_flat)
-            # (batch * seq_len, coord_dim) -> (batch, seq_len, coord_dim)
-            coord_emb = coord_emb_activated.view(batch_size, seq_len, self.coord_dim)
-
-            # 将ID嵌入和坐标嵌入在特征维度拼接
-            lstm_input = torch.cat([id_emb, coord_emb], dim=-1)
-        elif self.coord_embedding_layer is not None and seq_coords is None:
-            # print("警告: 模型配置了坐标嵌入，但未提供 seq_coords。将仅使用ID嵌入。")
-            pass  # lstm_input 保持为 id_emb
-
-        # 3. 通过 LSTM 层
-        # output: (batch, seq_len, lstm_hidden) - 所有时间步的输出
-        # h_n: (num_layers, batch, lstm_hidden) - 最后一个时间步的隐藏状态
-        # c_n: (num_layers, batch, lstm_hidden) - 最后一个时间步的细胞状态
-        lstm_output, (h_n, c_n) = self.lstm(lstm_input)
-
-        # 4. 提取序列最后一个时间步的输出作为整体序列表示
-        # lstm_output 包含了所有时间步的输出，我们取最后一个
-        # last_out: (batch, lstm_hidden)
-        last_out = lstm_output[:, -1, :]
-
-        # 5. 应用 dropout
-        last_out_dropped = self.dropout_layer(last_out)
-
-        # 6. 输出预测得分 (logits)
-        # logits: (batch, num_classes)
-        logits = self.output_fc(last_out_dropped)
-
+class NextGridPredictor(nn.Module):
+    """
+    下一个网格预测器：预测品牌下一个最佳选址位置
+    
+    这是整个模型的主体部分，采用多模态融合方法，将三种不同类型的信息
+    (历史选址序列、地理坐标、POI特征)整合起来，共同预测下一个最佳选址位置。
+    
+    模型处理流程:
+    1. 通过各自的编码器分别编码三种信息
+    2. 将编码后的特征向量拼接起来
+    3. 通过多层感知机进行特征融合和提取
+    4. 最终通过线性分类器预测下一个网格的概率分布
+    
+    多模态融合的优势:
+    - 序列信息: 捕捉品牌扩张的时序模式和依赖关系
+    - 坐标信息: 考虑地理位置的连续性和空间分布
+    - POI信息: 考虑周边设施和商业环境的影响
+    
+    参数:
+        num_classes: 类别数量，即网格总数
+        embed_dim: 网格ID的嵌入维度，默认为32
+        lstm_hidden: LSTM隐藏层维度，默认为64
+        lstm_layers: LSTM层数，默认为1
+        coord_dim: 坐标特征维度，默认为2 (经度、纬度)
+        poi_dim: POI特征维度，默认为10 (10种POI类型)
+        coord_out_dim: 坐标编码后的维度，默认为16
+        poi_out_dim: POI编码后的维度，默认为16
+        fusion_dim: 特征融合后的维度，默认为64
+        dropout: Dropout比率，用于防止过拟合，默认为0.1
+    """
+    def __init__(self, num_classes, embed_dim=32, lstm_hidden=64, lstm_layers=1,
+                 coord_dim=2, poi_dim=10, coord_out_dim=16, poi_out_dim=16, fusion_dim=64, dropout=0.1):
+        super().__init__()
+        # 序列编码器：处理历史选址序列
+        self.seq_encoder = SeqEncoder(num_classes, embed_dim, lstm_hidden, lstm_layers, dropout)
+        # 坐标编码器：处理地理坐标信息
+        self.coord_encoder = MLPEncoder(coord_dim, coord_out_dim)
+        # POI编码器：处理兴趣点特征信息
+        self.poi_encoder = MLPEncoder(poi_dim, poi_out_dim)
+        # 特征融合网络：整合三种编码后的特征
+        self.fusion = nn.Sequential(
+            nn.Linear(lstm_hidden + coord_out_dim + poi_out_dim, fusion_dim),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(fusion_dim, fusion_dim),
+            nn.ReLU(),
+            nn.Dropout(dropout)
+        )
+        # 分类器：预测下一个网格的概率分布
+        self.classifier = nn.Linear(fusion_dim, num_classes)
+    def forward(self, seq_ids, seq_coords, seq_poi):
+        """
+        前向传播
+        
+        数据流程:
+        1. 各编码器独立处理对应的输入特征
+        2. 对坐标和POI特征取序列平均值，降维处理
+        3. 拼接所有特征向量
+        4. 通过融合网络进一步提取联合特征
+        5. 通过分类器预测下一个网格的概率分布
+        
+        参数:
+            seq_ids: 网格ID序列，形状为(batch_size, seq_len)
+            seq_coords: 坐标序列，形状为(batch_size, seq_len, 2)
+            seq_poi: POI特征序列，形状为(batch_size, seq_len, 10)
+            
+        返回:
+            logits: 下一个网格的预测概率分布，形状为(batch_size, num_classes)
+        """
+        # 输入: (batch, seq_len, dim)
+        seq_out = self.seq_encoder(seq_ids)               # (batch, lstm_hidden)
+        
+        # 取坐标序列的平均值，简化处理同时保留整体分布信息
+        coords_out = self.coord_encoder(seq_coords.mean(dim=1)) # (batch, coord_out_dim)
+        
+        # 取POI特征序列的平均值，同样简化处理
+        poi_out = self.poi_encoder(seq_poi.mean(dim=1))   # (batch, poi_out_dim)
+        
+        # 特征拼接：将三种编码后的特征向量拼接起来
+        x = torch.cat([seq_out, coords_out, poi_out], dim=-1)
+        
+        # 特征融合：通过MLP进一步提取联合特征
+        f = self.fusion(x)
+        
+        # 分类预测：预测下一个网格的概率分布
+        logits = self.classifier(f)
         return logits
-
-
-if __name__ == '__main__':
-    # 示例用法
-    num_classes_example = 100  # 假设有100个不同的网格ID
-    embed_dim_example = 32
-    coord_dim_example = 8  # 使用坐标嵌入
-    lstm_hidden_example = 64
-
-    # 创建模型实例
-    model_with_coords = StorePredictionModel(num_classes_example, embed_dim_example, coord_dim_example,
-                                             lstm_hidden_example)
-    model_no_coords = StorePredictionModel(num_classes_example, embed_dim_example, 0,
-                                           lstm_hidden_example)  # coord_dim=0
-
-    # 准备伪输入数据
-    batch_size_example = 4
-    seq_len_example = 10
-
-    # (batch, seq_len) - 网格ID序列
-    dummy_seq_ids = torch.randint(0, num_classes_example, (batch_size_example, seq_len_example))
-    # (batch, seq_len, 2) - 对应的坐标序列 (归一化到0-1)
-    dummy_seq_coords = torch.rand(batch_size_example, seq_len_example, 2)
-
-    print("测试带坐标嵌入的模型:")
-    # 前向传播
-    try:
-        logits_output_wc = model_with_coords(dummy_seq_ids, dummy_seq_coords)
-        print(f"输入ID序列形状: {dummy_seq_ids.shape}")
-        print(f"输入坐标序列形状: {dummy_seq_coords.shape}")
-        print(f"输出Logits形状: {logits_output_wc.shape} (应为: ({batch_size_example}, {num_classes_example}))")
-    except Exception as e:
-        print(f"带坐标嵌入的模型前向传播出错: {e}")
-
-    print("\n测试不带坐标嵌入的模型:")
-    try:
-        logits_output_nc = model_no_coords(dummy_seq_ids)  # 不传入坐标
-        print(f"输入ID序列形状: {dummy_seq_ids.shape}")
-        print(f"输出Logits形状: {logits_output_nc.shape} (应为: ({batch_size_example}, {num_classes_example}))")
-    except Exception as e:
-        print(f"不带坐标嵌入的模型前向传播出错: {e}")
-
-    print("\n测试带坐标嵌入的模型，但不提供坐标输入 (应有警告或正常运行):")
-    try:
-        logits_output_wc_no_coords_input = model_with_coords(dummy_seq_ids)  # 故意不传坐标
-        print(f"输入ID序列形状: {dummy_seq_ids.shape}")
-        print(
-            f"输出Logits形状: {logits_output_wc_no_coords_input.shape} (应为: ({batch_size_example}, {num_classes_example}))")
-    except Exception as e:
-        print(f"模型(配置了坐标嵌入)但不提供坐标输入时出错: {e}")
-

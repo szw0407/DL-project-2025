@@ -7,6 +7,7 @@ import pandas as pd
 import numpy as np
 import ast
 from sklearn.model_selection import train_test_split
+from transformers import BertTokenizer
 
 def parse_list(s):
     """
@@ -114,12 +115,16 @@ def make_samples(data_csv_path, coords_map, poi_feat_map, grid2idx, max_seq_len=
         max_seq_len: 最大序列长度，若超过则截断
         
     返回:
-        brand_samples: 样本列表，每个样本是(前缀索引, 前缀坐标, 前缀POI特征, 目标索引)的元组
+        brand_samples: 样本列表，每个样本是(前缀索引, 前缀坐标, 前缀POI特征, 品牌文本, 目标索引)的元组
     """
     data_df = pd.read_csv(data_csv_path)
     brand_samples = []
     for _, row in data_df.iterrows():
-        brand = row['brand_name']
+        brand_name = row['brand_name']
+        brand_type = row['brand_type']
+        # 将品牌名称和类型组合成一个文本
+        brand_text = f"{brand_name} {brand_type}"
+        
         gid_list = parse_list(row['grid_id_list'])
         seq = sort_by_density(gid_list, coords_map)
         if len(seq) < 2: continue  # 至少需要两个点才能形成序列预测样本
@@ -132,7 +137,7 @@ def make_samples(data_csv_path, coords_map, poi_feat_map, grid2idx, max_seq_len=
             prefix_coords = [coords_map[g] for g in prefix]
             prefix_poi = [poi_feat_map[g] for g in prefix]
             target_idx = grid2idx[target]
-            brand_samples.append((prefix_idx, prefix_coords, prefix_poi, target_idx))
+            brand_samples.append((prefix_idx, prefix_coords, prefix_poi, brand_text, target_idx))
     return brand_samples
 
 def load_all_data(train_csv, test_csv, grid_csv, val_size=0.2):
@@ -142,7 +147,7 @@ def load_all_data(train_csv, test_csv, grid_csv, val_size=0.2):
     该函数是数据处理的主入口，完成以下步骤：
     1. 加载网格信息（坐标和POI特征）
     2. 构建全局网格ID到索引的映射
-    3. 生成训练和测试样本
+    3. 生成训练和测试样本（包含品牌信息）
     4. 从训练样本中再划分出验证集
     
     数据划分的合理性：
@@ -157,9 +162,9 @@ def load_all_data(train_csv, test_csv, grid_csv, val_size=0.2):
         val_size: 验证集比例，默认为0.2
         
     返回:
-        train_set: 训练集样本
-        val_set: 验证集样本
-        test_samples: 测试集样本
+        train_set: 训练集样本，每个样本包含(前缀索引, 前缀坐标, 前缀POI特征, 品牌文本, 目标索引)
+        val_set: 验证集样本，格式同训练集
+        test_samples: 测试集样本，格式同训练集
         num_classes: 类别数量（网格总数）
         grid2idx: 网格ID到索引的映射字典
     """
@@ -179,3 +184,27 @@ def load_all_data(train_csv, test_csv, grid_csv, val_size=0.2):
     train_set = [train_samples[i] for i in train_idx]
     val_set = [train_samples[i] for i in val_idx]
     return train_set, val_set, test_samples, num_classes, grid2idx
+
+def preprocess_brand_texts(brand_texts: list[str], tokenizer: BertTokenizer, max_length=64):
+    """
+    预先对品牌文本进行tokenization，避免在训练过程中重复tokenize
+    
+    参数:
+        brand_texts: 品牌文本列表
+        tokenizer: BERT tokenizer
+        max_length: 最大文本长度
+        
+    返回:
+        tokenized_data: 包含input_ids和attention_mask的字典
+    """
+    encoded = tokenizer(
+        brand_texts,
+        padding=True,
+        truncation=True,
+        max_length=max_length,
+        return_tensors='pt'
+    )
+    return {
+        'input_ids': encoded['input_ids'],
+        'attention_mask': encoded['attention_mask']
+    }

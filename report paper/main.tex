@@ -1,0 +1,1134 @@
+\documentclass{article}
+
+% 中文支持设置
+\usepackage{xeCJK}
+\usepackage{fontspec} % 添加字体支持
+\usepackage{indentfirst} % Add indentfirst package for first paragraph indentation
+\setlength{\parindent}{2em} % Set paragraph indentation to 2em
+
+% 设置西文字体
+\setmainfont{Times New Roman} % 设置西文主字体为Times New Roman（衬线体）
+\setsansfont{Arial} % 设置西文无衬线字体为Arial
+\setmonofont{Consolas}[Scale=0.85] % 设置等宽字体，支持Unicode字符
+
+% 设置中文字体
+\setCJKmainfont[BoldFont=SimHei]{SimSun} % 设置正文字体为宋体（衬线体），加粗用黑体
+\setCJKsansfont{SimHei} % 设置无衬线字体为黑体（用于标题）
+\setCJKmonofont{FangSong} % 设置等宽字体为仿宋
+\newCJKfontfamily\songti{SimSun} % 设置宋体字体命令
+\newCJKfontfamily\heiti[BoldFont=SimHei]{SimHei} % 设置黑体字体命令
+\newCJKfontfamily\kaishu{KaiTi} % 设置楷体字体命令（用于斜体替代）
+\newCJKfontfamily\fangsong{FangSong} % 设置仿宋字体命令
+\newCJKfontfamily\lishu{LiShu} % 设置隶书字体命令
+
+% 页面设置
+\usepackage[a4paper,top=2cm,bottom=2cm,left=3cm,right=3cm,marginparwidth=1.75cm]{geometry}
+\usepackage{algorithm}
+\usepackage{algpseudocode} 
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{graphicx}
+\usepackage{longtable}
+\usepackage{array}
+\usepackage{booktabs}
+\usepackage{xcolor}
+\usepackage{colortbl}
+\usepackage{tikz}
+\usetikzlibrary{shapes.geometric, arrows, calc, positioning, fit, backgrounds, matrix}
+\usepackage[unicode]{hyperref}
+\usepackage{listings}
+\usepackage{float} % 添加 float 宏包
+\usepackage{keywords} % 引入关键词环境定义
+\usepackage{codestyle} % 引入代码样式定义
+
+% 中文标签设置
+\renewcommand{\abstractname}{摘要}
+\renewcommand{\contentsname}{目录}
+\renewcommand{\listfigurename}{插图目录}
+\renewcommand{\listtablename}{表格目录}
+\renewcommand{\refname}{参考文献}
+\renewcommand{\indexname}{索引}
+\renewcommand{\figurename}{图}
+\renewcommand{\tablename}{表}
+\renewcommand{\appendixname}{附录}
+
+\title{深度学习报告}
+
+\usepackage{hyperref}
+\begin{document}
+\maketitle
+
+\begin{abstract}
+商业选址决策是企业扩张过程中的关键环节，传统方法依赖专家经验且主观性强。本文提出了一种基于多模态融合的深度学习方法来解决商业智能选址预测问题。该方法将选址预测建模为时空序列预测任务，通过并行编码器架构同时处理三种关键信息：历史选址序列的时序特征、地理坐标的空间特征和兴趣点（POI）的环境特征。具体而言，采用LSTM网络编码品牌扩张的时序依赖关系，利用多层感知机（MLP）分别编码空间坐标和POI统计特征，然后通过深度融合网络实现跨模态信息整合。为了克服数据稀缺问题，设计了基于密度的序列排序算法和滑动窗口数据增强策略。在真实商业数据集上的实验结果显示，相比最佳基线方法，所提出的模型在Acc@1、Acc@5、Acc@10和MRR指标上分别取得了347\%、50.5\%、28.1\%和145.6\%的显著提升，验证了多模态融合方法在商业选址预测任务中的有效性。该研究为数据驱动的商业决策提供了新的技术路径。
+\end{abstract}
+\keywords{选址预测, 深度学习, 网格模型, 多模态融合, 序列编码器, 空间编码器, 环境编码器}
+\newpage
+% 目录
+
+\tableofcontents
+\newpage
+\section{引言}
+在现代商业环境中，选址决策是品牌扩张和市场布局过程中至关重要的一环。一个优质的门店位置不仅能够提升品牌曝光度和客流量，还直接影响企业的经济效益和市场竞争力。传统的选址方法主要依赖于专家经验和简单的人口统计分析，存在主观性强、难以量化、适应性差等局限。随着大数据、机器学习和深度学习技术的快速发展，基于数据驱动的选址预测方法为选址预测提供更多的思路启发，其能够通过对历史数据的深入分析，挖掘出潜在的空间模式和内在偏好，从而实现更科学、精准、有效的选址决策。
+
+本课题聚焦于“商业智能选址预测”，旨在通过分析品牌历史门店的地理分布数据，建立能够预测品牌下一家门店最优选址的模型。具体而言，课题以网格（Grid）为基本地理单元，利用品牌在城市中的历史开店网格序列及每个网格的地理属性特征，挖掘品牌扩张的空间模式和内在偏好。通过对历史数据的建模与学习，预测品牌未来最有可能选址的网格位置，为企业提供科学、量化的决策依据。
+
+本项目的数据集包含多个品牌的历史门店分布（训练集和测试集），以及覆盖研究区域的网格地理坐标信息。提供数据已划分为训练集和测试集，网格划分保证了空间分析的精度和一致性。研究区域的经纬度范围明确，便于空间特征的提取和建模。
+
+\section{相关工作}
+
+项目的研究基于以下假设：
+\begin{enumerate}
+    \item 品牌的历史选址行为反映了其内在的扩张策略和偏好，通过学习这些模式，可以预测其未来的选址决策。
+    \item 相同品牌的选址思想会始终一致
+    \item 不同品牌之间的选址思想有相似之处
+    \item 品牌选址即为合理正确的，因此过往的选址历史可以对将来的有参考价值
+    \item 商铺的总体选址在统计学上有一定相关性，但是商家个体之间的选址行为还是基本独立的
+\end{enumerate}
+
+项目提供了多种基线（Baseline）模型或方法，包括简单模型和深度模型。在项目文档中，对比了多个基线方案的实验结果，展示了不同方法在选址预测任务中的表现，作为模型实现方案的参考和对比。
+
+\subsection{基线}
+
+随机猜测（Random guess）方法，将所有未出现过的网格作为候选集，随机选取若干作为预测结果\cite{Dietterich1998Approximate}。作为最简单的基线，这种方法严格意义上并不能算是预测模型，因为它没有任何的学习过程或者学习的能力，而仅能给出一个最多也只是基本符合数据整体统计分布的结果。
+
+一般认为，一个模型至少有一点作用，就可以将它和随机猜测进行对比，如果这个模型居然结果还不如随机猜测，那么这个模型就没有意义了，一定存在很明显的缺陷，比如严重的过拟合、特征选择不当、数据标签出现错误、数据分布出现重大偏差等\cite{Domingos2012MLthingstoknow}。
+
+
+\subsection{Word2vec}
+
+Word2vec是一种将离散对象映射为连续向量空间的无监督嵌入方法，最初用于自然语言处理。其核心思想是通过上下文预测目标（skip-gram）或通过目标预测上下文（CBOW），使得具有相似上下文的对象在向量空间中距离更近\cite{word2vec}。
+
+通常认为，在复杂任务上，Skip-gram模型通常比CBOW模型表现更好，尤其是在处理大规模数据集时。Skip-gram模型通过预测上下文网格来学习目标网格的嵌入向量，能够捕捉到更丰富的语义信息。可以朴素地理解为，skip-gram试图从很有限的上下文信息中，学习到目标相对复杂的分布规律；作为对比，CBOW则是在很复杂而丰富的上下文中试图学习一个相对简单的目标分布，这在很多需要泛化能力的任务上，可能效果较差\cite{menon_empirical_2020}。因此，下文的原理举例，以及这部分的相关工作，采用的是这种方式。
+
+\paragraph{Skip-gram模型原理}
+给定序列$S = [g_1, g_2, ..., g_T]$，skip-gram的目标是最大化目标网格$g_t$在上下文窗口$C$内预测其上下文网格的概率：
+\begin{equation}
+\mathcal{L} = \sum_{t=1}^{T} \sum_{-c \leq j \leq c, j \neq 0} \log P(g_{t+j} | g_t)
+\end{equation}
+其中，$c$为窗口大小，$P(g_{t+j} | g_t)$通常通过softmax建模：
+\begin{equation}
+P(g_O | g_I) = \frac{\exp(\mathbf{v}_{g_O}^\top \mathbf{v}_{g_I})}{\sum_{g=1}^{|V|} \exp(\mathbf{v}_g^\top \mathbf{v}_{g_I})}
+\end{equation}
+其中$\mathbf{v}_{g_I}$和$\mathbf{v}_{g_O}$分别为输入和输出网格的嵌入向量，$|V|$为网格总数。
+
+\begin{algorithm}[H]
+\caption{Word2vec Skip-gram训练流程}
+\begin{algorithmic}[1]
+\State \textbf{输入:} 网格序列$S = [g_1, ..., g_T]$，窗口大小$c$
+\State 初始化嵌入矩阵$\mathbf{V} \in \mathbb{R}^{|V| \times d}$
+\For{每个位置$t$ in $1$ to $T$}
+    \For{每个$j$ in $-c$ to $c$, $j \neq 0$}
+        \State 取中心网格$g_t$和上下文网格$g_{t+j}$
+        \State 计算$P(g_{t+j} | g_t)$
+        \State 根据损失$\mathcal{L}$反向传播，更新$\mathbf{V}$
+    \EndFor
+\EndFor
+\State \Return 训练好的嵌入$\mathbf{V}$
+\end{algorithmic}
+\end{algorithm}
+
+Word2vec嵌入可用于衡量网格间的空间相似性，常见用法为取历史网格序列的平均嵌入，与候选网格嵌入计算余弦相似度进行排序预测。
+
+基于Word2vec的嵌入方法被用到选址任务中。这种方法，虽然最初被用于自然语言处理，但是其本质是一种时序性的序列预测方法\cite{mohan_link_2021}，因此也可以被利用在这个任务中。该方法通过skip-gram模型训练每个网格的embedding，测试时将品牌历史网格序列的embedding取平均，计算与候选网格embedding的相似度（如点积、余弦相似度等），并据此排序预测结果。
+\subsection{深度学习模型方法}
+\subsubsection{LSTM+MLP}
+
+LSTM（Long Short-Term Memory，长短期记忆网络）是一种特殊的循环神经网络（RNN），能够有效捕捉序列中的长期依赖关系，解决传统RNN在长序列训练中梯度消失或爆炸的问题\cite{hochreiter_long_1997}。
+
+\paragraph{模型结构}
+LSTM单元由输入门（input gate）、遗忘门（forget gate）、输出门（output gate）和细胞状态（cell state）组成。其结构如图\ref{fig:lstm_structure}所示。
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[
+    node distance=1.5cm,
+    auto,
+    >=latex',
+    input/.style={circle, draw, fill=blue!20, minimum size=0.8cm, font=\small},
+    gate/.style={rectangle, draw, fill=purple!20, minimum size=0.8cm, font=\small},
+    state/.style={rectangle, draw, fill=green!20, minimum size=1cm, font=\small},
+    operation/.style={circle, draw, fill=gray!20, minimum size=0.6cm, font=\tiny},
+    arrow/.style={->, thick}
+]
+
+% 输入节点 - 放在门控单元下方
+\node[input] (xt) at (2,-1.5) {$x_t$};
+\node[input] (ht_1) at (4,-1.5) {$h_{t-1}$};
+\node[state] (ct_1) at (-2.5,2.5) {$C_{t-1}$};
+
+% 门控单元 - 等间距排列，文字在内部
+\node[gate, minimum width=1.2cm, minimum height=0.8cm, align=center] (fg) at (1,0.5) {\small 遗忘门\\$f_t$};
+\node[gate, minimum width=1.2cm, minimum height=0.8cm, align=center] (cg) at (3,0.5) {\small 候选值\\$\tilde{C}_t$};
+\node[gate, minimum width=1.2cm, minimum height=0.8cm, align=center] (ig) at (5,0.5) {\small 输入门\\$i_t$};
+\node[gate, minimum width=1.2cm, minimum height=0.8cm, align=center] (og) at (7,0.5) {\small 输出门\\$o_t$};
+
+% 操作节点
+\node[operation] (mult1) at (0,2.5) {$\times$};
+\node[operation] (mult2) at (4,2.5) {$\times$};
+\node[operation] (add) at (2,3.5) {$+$};
+\node[operation] (mult3) at (7,4) {$\times$};
+\node[operation] (tanh_out) at (5,4) {tanh};
+
+% 状态节点
+\node[state] (ct) at (2,4.5) {$C_t$};
+\node[state] (ht) at (7,5) {$h_t$};
+
+% 连接线
+\draw[arrow] (xt) -- (fg);
+\draw[arrow] (xt) -- (cg);
+\draw[arrow] (xt) -- (ig);
+\draw[arrow] (xt) -- (og);
+
+\draw[arrow] (ht_1) -- (fg);
+\draw[arrow] (ht_1) -- (cg);
+\draw[arrow] (ht_1) -- (ig);
+\draw[arrow] (ht_1) -- (og);
+
+\draw[arrow] (ct_1) -- (mult1);
+\draw[arrow] (fg) -- (mult1);
+\draw[arrow] (ig) -- (mult2);
+\draw[arrow] (cg) -- (mult2);
+
+\draw[arrow] (mult1) -- (add);
+\draw[arrow] (mult2) -- (add);
+\draw[arrow] (add) -- (ct);
+
+\draw[arrow] (ct) -- (tanh_out);
+\draw[arrow] (og) -- (mult3);
+\draw[arrow] (tanh_out) -- (mult3);
+\draw[arrow] (mult3) -- (ht);
+
+\end{tikzpicture}
+\caption{LSTM单元结构图}
+\label{fig:lstm_structure}
+\end{figure}
+
+LSTM的核心机制包括三个门控单元和细胞状态：
+
+\begin{itemize}
+\item \textbf{遗忘门}：决定从细胞状态中丢弃什么信息，公式为$f_t = \sigma(W_f \cdot [h_{t-1}, x_t] + b_f)$
+\item \textbf{输入门}：决定什么新信息被存储在细胞状态中，公式为$i_t = \sigma(W_i \cdot [h_{t-1}, x_t] + b_i)$
+\item \textbf{候选值}：创建新的候选值向量，公式为$\tilde{C}_t = \tanh(W_C \cdot [h_{t-1}, x_t] + b_C)$
+\item \textbf{细胞状态更新}：结合遗忘门和输入门的结果，公式为$C_t = f_t * C_{t-1} + i_t * \tilde{C}_t$
+\item \textbf{输出门}：决定细胞状态的哪些部分将输出，公式为$o_t = \sigma(W_o \cdot [h_{t-1}, x_t] + b_o)$
+\item \textbf{隐藏状态}：最终的输出，公式为$h_t = o_t * \tanh(C_t)$
+\end{itemize}
+
+LSTM能够有效捕捉序列中的长期依赖信息，广泛应用于序列建模、时间序列预测、自然语言处理等任务。
+
+深度学习方法方面，LSTM+MLP结构利用嵌入层将输入网格序列编码为向量，随后通过LSTM捕捉序列中的时序依赖\cite{hochreiter_long_1997}，最后通过多层感知机（MLP）进行分类预测。
+
+\subsubsection{Transformer+MLP}
+
+Transformer模型由Vaswani等人在2017年提出，最初用于机器翻译任务，其核心是自注意力机制（Self-Attention），完全摒弃了循环和卷积结构\cite{vaswani_attention_2023}。与LSTM相比，Transformer能够更好地捕捉序列中任意两个位置之间的依赖关系，并且具有更好的并行计算能力。
+
+\paragraph{模型结构}
+Transformer编码器由多个相同的层堆叠而成，每一层包含两个主要子层：多头自注意力机制（Multi-Head Self-Attention）和位置全连接前馈网络（Position-wise Feed-Forward Network）。每个子层后面都接一个残差连接（Residual Connection）和层归一化（Layer Normalization）。其结构如图\ref{fig:transformer_encoder}所示。
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[
+    node distance=1.5cm and 2cm,
+    auto,
+    >=latex',
+    block/.style={rectangle, draw, fill=blue!20, text width=8em, text centered, rounded corners, minimum height=2.5em},
+    op/.style={circle, draw, fill=orange!20, minimum size=1cm, font=\small},
+    arrow/.style={->, thick}
+]
+% Nodes
+\node (input) at (0,0) {输入嵌入 + 位置编码};
+\node[block] (mha) at (0,2.5) {多头自注意力};
+\node[op] (add1) at (0,4.5) {$+$};
+\node[block, fill=green!20] (norm1) at (0,6) {层归一化};
+\node[block] (ffn) at (0,8) {前馈网络};
+\node[op] (add2) at (0,10) {$+$};
+\node[block, fill=green!20] (norm2) at (0,11.5) {层归一化};
+\node (output) at (0,13.5) {输出};
+
+% Paths
+\draw[arrow] (input) -- (mha);
+\draw[arrow] (mha) -- (add1);
+\draw[arrow] (add1) -- (norm1);
+\draw[arrow] (norm1) -- (ffn);
+\draw[arrow] (ffn) -- (add2);
+\draw[arrow] (add2) -- (norm2);
+\draw[arrow] (norm2) -- (output);
+
+% Residual connections
+\draw[arrow] (input) -| ++(-2,0) |- (add1);
+\draw[arrow] (norm1) -| ++(-2,0) |- (add2);
+
+\end{tikzpicture}
+\caption{Transformer编码器层结构图}
+\label{fig:transformer_encoder}
+\end{figure}
+
+其核心组件和计算过程如下：
+\begin{itemize}
+    \item \textbf{位置编码}：由于模型不包含循环结构，需要为输入序列添加位置编码（Positional Encoding），以注入序列的位置信息。
+    \item \textbf{自注意力机制}：对于输入序列的每个元素，通过线性变换得到查询（Query）、键（Key）、值（Value）三个向量。注意力权重通过计算查询和所有键的点积得到，然后通过Softmax函数归一化。
+    \begin{equation}
+        \text{Attention}(Q, K, V) = \text{softmax}\left(\frac{QK^T}{\sqrt{d_k}}\right)V
+    \end{equation}
+    其中$d_k$是键向量的维度，用于缩放点积，防止梯度过小。
+    \item \textbf{多头注意力}：将Q、K、V向量分别进行多次线性变换，并行计算多次注意力，然后将结果拼接并再次进行线性变换。这使得模型能从不同表示子空间中学习信息。
+    \item \textbf{前馈网络}：每个位置的输出都会经过一个相同的全连接前馈网络，通常由两个线性层和一个ReLU激活函数组成。
+\end{itemize}
+
+\begin{algorithm}[H]
+\caption{Transformer编码器前向传播}
+\begin{algorithmic}[1]
+\State \textbf{输入:} 输入嵌入序列 $X = [x_1, ..., x_n]$
+\State $X \gets X + \text{PositionalEncoding}(X)$ \Comment{添加位置信息}
+\State \Comment{多头自注意力}
+\State $Q, K, V \gets XW_Q, XW_K, XW_V$
+\State $Z \gets \text{Attention}(Q, K, V)$
+\State $X_1 \gets \text{LayerNorm}(X + Z)$ \Comment{残差连接和层归一化}
+\State \Comment{前馈网络}
+\State $F \gets \text{FeedForward}(X_1)$
+\State $Y \gets \text{LayerNorm}(X_1 + F)$ \Comment{残差连接和层归一化}
+\State \Return $Y$
+\end{algorithmic}
+\end{algorithm}
+
+在选址预测任务中，Transformer+MLP结构利用Transformer编码器处理历史网格序列的嵌入，捕捉网格间的复杂依赖关系。编码器输出的序列表示（通常取第一个token `[CLS]` 的输出或对所有token输出取平均）被送入MLP，进行最终的分类预测。
+
+
+
+\subsection{对比学习}
+
+对比学习（Contrastive Learning）是一种重要的自监督学习范式，其核心思想是通过学习相似样本之间的相似性和不相似样本之间的差异性来获得有效的数据表示\cite{chen_simple_2020}。与传统的监督学习依赖大量标注数据不同，对比学习能够从无标签或少标签的数据中学习到富有表达力的特征表示，在计算机视觉、自然语言处理等多个领域取得了显著成功。
+
+\paragraph{对比学习的核心原理}
+对比学习的基本假设是：语义相似的样本在表示空间中应该彼此接近，而语义不同的样本应该相互远离。这一思想可以追溯到度量学习（Metric Learning）的概念，但对比学习通过巧妙的样本构造和损失函数设计，实现了更加有效的表示学习。
+
+给定一个锚点样本（anchor），对比学习方法通常构造正样本对和负样本对：
+\begin{itemize}
+\item \textbf{正样本对}：语义相似或属于同一类别的样本对，如同一图像的不同增强版本
+\item \textbf{负样本对}：语义不同或属于不同类别的样本对，通常从其他样本中随机采样
+\end{itemize}
+
+目标函数旨在拉近正样本对的距离，同时推远负样本对的距离。最广泛使用的损失函数是InfoNCE（Noise Contrastive Estimation）\cite{oord_representation_2018}：
+
+\begin{equation}
+\mathcal{L}_{InfoNCE} = -\log \frac{\exp(\text{sim}(z, z^+) / \tau)}{\exp(\text{sim}(z, z^+) / \tau) + \sum_{i=1}^{N} \exp(\text{sim}(z, z_i^-) / \tau)}
+\end{equation}
+
+其中$z$是锚点样本的表示，$z^+$是正样本表示，$\{z_i^-\}_{i=1}^N$是负样本表示集合，$\text{sim}(\cdot, \cdot)$是相似度函数（如余弦相似度），$\tau$是温度参数。
+
+\paragraph{对比学习的优势}
+对比学习在多个方面表现出独特的优势：
+
+\begin{enumerate}
+\item \textbf{数据效率}：无需大量标注数据，能够从无监督或弱监督的数据中学习
+\item \textbf{表示质量}：学习到的表示具有良好的区分性和泛化性
+\item \textbf{迁移能力}：预训练的表示可以有效迁移到下游任务
+\item \textbf{鲁棒性}：对数据噪声和分布偏移具有较强的鲁棒性
+\end{enumerate}
+
+\paragraph{在选址预测中的应用}
+在商业选址预测任务中，传统的监督学习方法面临标签稀缺和样本不平衡的问题。对比学习提供了一种有效的解决方案：通过构造合理的正负样本对，模型能够学习到品牌选址的内在模式，即使在有限的监督信号下也能获得良好的表示。
+
+基于注意力融合的对比学习方法（Attention-based-fusion+对比学习）进一步提升了模型的表达能力。具体而言，首先给定品牌的历史网格序列，将其中一个网格作为ground truth，其余网格作为输入序列。对输入序列中的每个grid进行嵌入（embedding），然后通过自注意力（self-attention）机制对序列进行编码，获得每个位置的上下文表示。将self-attention后的序列embedding取平均，得到该序列的全局表示（anchor embedding）。以ground truth对应的grid embedding作为正样本，将所有未出现在历史序列中的grid中随机选取若干作为负样本，提取其embedding。最终，采用InfoNCE损失函数进行正负样本的对比训练，有效提升了模型对空间选址的判别能力和泛化性能。
+
+\begin{algorithm}[H]
+\caption{基于对比学习的选址预测训练流程}
+\begin{algorithmic}[1]
+\State \textbf{输入:} 品牌历史网格序列 $S = [g_1, ..., g_T]$，所有网格集合 $V$，负样本数量 $K$
+\State 初始化嵌入模型 $\text{embed}(\cdot)$ 和自注意力模型 $\text{SelfAttention}(\cdot)$
+\For{每个训练迭代}
+    \State 从序列 $S$ 中随机选择一个网格 $g_t$ 作为正样本 $g_{pos}$
+    \State 将剩余的网格 $S' = S \setminus \{g_t\}$ 作为输入序列
+    \State 从 $V \setminus S$ 中随机采样 $K$ 个网格作为负样本集 $G_{neg}$
+    
+    \State \Comment{编码输入序列以生成锚点表示}
+    \State 对输入序列 $S'$ 中的每个网格进行嵌入: $E_{S'} = [\text{embed}(g) \text{ for } g \in S']$
+    \State 通过自注意力机制处理嵌入序列: $H = \text{SelfAttention}(E_{S'})$
+    \State 计算锚点嵌入: $\mathbf{v}_{anchor} = \text{mean}(H)$
+    
+    \State \Comment{编码正负样本}
+    \State 编码正样本: $\mathbf{v}_{pos} = \text{embed}(g_{pos})$
+    \State 编码负样本: $\mathbf{V}_{neg} = [\text{embed}(g) \text{ for } g \in G_{neg}]$
+    
+    \State \Comment{计算InfoNCE损失}
+    \State 计算正样本相似度: $s_{pos} = \text{sim}(\mathbf{v}_{anchor}, \mathbf{v}_{pos})$
+    \State 计算负样本相似度: $s_{neg,k} = \text{sim}(\mathbf{v}_{anchor}, \mathbf{v}_{neg,k})$ for $k=1, ..., K$
+    \State 计算损失 $\mathcal{L} = -\log \frac{\exp(s_{pos} / \tau)}{\exp(s_{pos} / \tau) + \sum_{k=1}^{K} \exp(s_{neg,k} / \tau)}$
+    
+    \State \Comment{更新模型参数}
+    \State 根据损失 $\mathcal{L}$ 反向传播，更新模型参数
+\EndFor
+\State \Return 训练好的模型
+\end{algorithmic}
+\end{algorithm}
+\subsection{相关指标}
+在选址预测任务中，我们采用了多个评价指标来全面衡量模型的性能。这些指标从不同角度反映了模型预测的准确性和实用性。
+
+\subsubsection{准确率指标 (Accuracy@K)}
+
+准确率指标acc@K衡量的是在模型预测的前K个结果中是否包含真实的目标网格。具体定义为：
+
+\begin{equation}
+acc@K = \frac{1}{N} \sum_{i=1}^{N} \mathbb{I}(y_i \in \text{Top-K}(\hat{y}_i))
+\end{equation}
+
+其中$N$是测试样本总数，$y_i$是第$i$个样本的真实标签，$\hat{y}_i$是模型对第$i$个样本的预测结果，$\mathbb{I}(\cdot)$是指示函数，$\text{Top-K}(\hat{y}_i)$表示预测概率最高的前K个网格。
+
+\begin{itemize}
+\item \textbf{acc@1}：预测的第一个网格是否为正确答案，反映模型的精确预测能力
+\item \textbf{acc@5}：预测的前5个网格中是否包含正确答案，在实际应用中更具参考价值
+\item \textbf{acc@10}：预测的前10个网格中是否包含正确答案，为决策者提供更多候选选项
+\end{itemize}
+
+\subsubsection{平均排名 (Mean Rank)}
+
+平均排名指标衡量真实目标网格在所有预测结果中的平均排序位置：
+
+\begin{equation}
+\text{Mean Rank} = \frac{1}{N} \sum_{i=1}^{N} \text{rank}(y_i, \hat{y}_i)
+\end{equation}
+
+其中$\text{rank}(y_i, \hat{y}_i)$表示真实网格$y_i$在预测结果$\hat{y}_i$中的排名位置。该指标越小表示模型性能越好，理想情况下所有真实目标都应该排在第一位。
+
+\subsubsection{评价指标的实际意义}
+
+在商业选址决策中，这些指标具有重要的实际意义：
+
+\begin{itemize}
+\item \textbf{决策效率}：acc@1高的模型能够直接给出最优选址建议，提高决策效率
+\item \textbf{候选方案}：acc@5和acc@10为决策者提供多个候选方案，增强决策的灵活性
+\item \textbf{排序质量}：Mean Rank反映了模型对所有候选位置的整体排序能力，有助于全面评估选址空间。这也是我们最后判断早停的依据，因为这个指标直接反映了模型对所有候选网格的排序能力，能够更全面地评估模型的性能。
+\end{itemize}
+
+通过这些指标的综合评估，我们能够全面了解模型在不同应用场景下的表现，为实际的商业选址决策提供可靠的技术支撑。
+Baseline 的参考指标如表\ref{tab:baseline_results}所示。
+
+\begin{table}[H]
+\centering
+\begin{tabular}{|c|c|c|c|c|}
+\hline
+\rowcolor[HTML]{D9EAD3}
+\textbf{方法} & \textbf{acc@1} & \textbf{acc@5} & \textbf{acc@10} & \textbf{Mean rank} \\ \hline
+随机猜测 & 0.0165 & 0.0620 & 0.1141 & 0.0373 \\ \hline
+Word2vec & 0.0446 & 0.2625 & 0.3622 & 0.1288 \\ \hline
+LSTM+MLP & 0.0414 & 0.1691 & 0.2790 & 0.0976 \\ \hline
+Transformer+MLP & 0.0525 & 0.1665 & 0.2759 & 0.1027 \\ \hline
+对比学习 & 0.0604 & 0.2296 & 0.3702 & 0.1326 \\ \hline
+\end{tabular}
+\caption{Baseline方法在选址预测任务上的实验结果}
+\label{tab:baseline_results}
+\end{table}
+
+
+上述方法在本项目数据集上的实验结果如表所示。可以看出，深度学习模型（如Transformer+MLP、对比学习方法）在准确率和平均排序等指标上均优于传统方法，尤其是对比学习方法在acc@1和acc@10等指标上表现突出，显示了其在空间选址预测任务中的潜力。此外，模型结构的层级设计（如嵌入层、序列建模层、融合层和输出层）对最终性能有显著影响，合理的结构选择和层级组合能够更好地捕捉空间和序列特征，从而提升预测效果。
+
+\section{方法探索}
+
+实验的目标是优化模型结构，使之表现优于基线模型。通过对比不同的模型架构和特征处理方法，探索最优的选址预测方案。因此，考虑到数据集的特点和任务需求，我们设计了一个多模态融合的神经网络架构，该架构能够同时处理和融合三种不同类型的信息：序列特征、空间特征和环境特征。我们通过对数据进行预处理和增加有关特征的方式，添加了序列和环境特征，此外充分利用深度模型的各种特性，对其和空间特征共同编码处理，从而实现对品牌选址的更加精准的预测。
+
+\subsection{数据预处理}
+
+数据集中有已经分配好的训练集和测试集。数据的内容主要是品牌历史门店的选址信息。具体分析数据结构如表\ref{tab:dataset_fields}所示。
+
+\begin{table}[H]
+\centering
+\begin{tabular}{|c|c|c|}
+\hline
+\rowcolor[HTML]{D9EAD3}
+\textbf{字段} & \textbf{类型} & \textbf{描述} \\ \hline
+brand\_name & string & 品牌名称 \\ \hline
+brand\_type & string & 品牌类型，用;分隔开 \\ \hline
+longtitude\_list & list(float) & 网格经度列表 \\ \hline
+latitude\_list & list(float) & 网格纬度列表 \\ \hline
+grid\_id\_list & list(int) & 网格ID列表 \\ \hline
+\end{tabular}
+\caption{数据集字段说明}
+\label{tab:dataset_fields}
+\end{table}
+
+
+此外还通过了网格数据，给出对应网格ID在真实地理世界中的经纬度坐标。网格数据的结构如表\ref{tab:grid_fields}所示。
+
+\begin{table}[H]
+\centering
+\begin{tabular}{|c|c|c|}
+\hline
+\rowcolor[HTML]{D9EAD3}
+\textbf{字段} & \textbf{类型} & \textbf{描述} \\ \hline
+grid\_id & int & 网格ID \\ \hline
+grind\_lon\_min & float & 网格左下角经度 \\ \hline
+grind\_lon\_max & float & 网格右上角经度 \\ \hline
+grind\_lat\_min & float & 网格左下角纬度 \\ \hline
+grind\_lat\_max & float & 网格右上角纬度 \\ \hline
+\end{tabular}
+\caption{网格数据字段说明}
+\label{tab:grid_fields}
+\end{table}
+
+数据加载是数据预处理的第一步。我们需要从提供的训练集和测试集文件中读取品牌历史门店的选址信息，并将其转换为适合模型输入的格式，提交给神经网络。
+
+提供的数据集绝大多数都是“可直接向量化”的数据，即数字或者数字的元组。因此，直接读取数据集中的这部分数据就可以实现数据的加载。为了提高计算效率，将数据移动到专门的GPU完成计算，因此需要将数据转换为PyTorch的Tensor格式。具体实现方式见代码，不赘述。
+
+提供的数据集绝大多数都是"可直接向量化"的数据，即数字或者数字的元组。因此，直接读取数据集中的这部分数据就可以实现数据的加载。为了提高计算效率，将数据移动到专门的GPU完成计算，因此需要将数据转换为PyTorch的Tensor格式。具体实现方式见代码，不赘述。
+
+此外，可以尝试使用AMP（Automatic Mixed Precision）来加速模型训练\cite{micikevicius_mixed_2018}。AMP是一种混合精度训练技术，通过自动选择使用半精度（FP16）或单精度（FP32）进行计算，能够在保持模型精度的前提下，显著提高训练速度并减少内存占用。该技术的核心思想是利用IEEE半精度浮点数存储权重、激活和梯度，同时维护一个单精度权重副本用于梯度累积，并通过损失缩放技术处理半精度数值范围有限的问题，从而获得接近2倍的内存节省和显著的计算加速。
+
+\subsection{特征增强}
+
+“坐标”含有的信息过于的稀少，难以直接被模型“理解”，从而掌握其中内在的一些联系。需要对数据增加有关的信息，以扩展其表达能力，否则模型表达能力的上限就会受到限制\cite{Shalev-Shwartz2014UnderstandingML}。为了得出更加合理的结论，必须在数据预处理阶段强化并且增加特征。
+
+\subsubsection{网格信息加载}
+
+网格（Grid）是商业选址预测任务中的基本地理单元。在原始数据集里，每个网格由其唯一的网格ID和对应的地理坐标（经纬度）组成。这个体现了网格在空间上的位置信息。但是这个信息并不能很有效地描述网格的全部特性。为了增强网格的信息，需要从数据集中重新挖掘出可能存在的信息。兴趣点（POI, Point of Interest）是地理信息系统（GIS）和位置服务中非常核心的概念，它指的是地图上具有特定意义或吸引力的地点。它代表一个具有空间位置和语义信息的地理目标，比如餐厅、医院、公交站、商场、景点等，在经纬度以外，其还通常包括有名称、地址、类别等信息，并经常以向量的形式表示。POI 可以将三维世界中的复杂实体抽象为一个零维点，从而便于管理、分析和计算\cite{psyllidis_points_2022}。
+
+因此，可以从全部的门店数据中，统计每个网格的相关信息，再将其关联到网格ID上，构成更加立体、具有丰富特征的高维网格对象。具体而言，再项目实现上，从网格坐标文件中提取每个网格的地理信息，包括经纬度坐标和10种类型的POI特征（医疗、住宿、摩托、体育、餐饮、公司、购物、生活、科教、汽车）。这种类型的统计信息，虽然引入了一些和其他若干特征高度相关的特征，但是会在大型复杂模型的训练上甚至有性能提升的作用\cite{Heaton_2016}。
+
+\subsubsection{特征归一化}
+
+为了消除不同特征间的尺度差异，我们对坐标和POI特征分别进行归一化处理：
+
+对于坐标特征，我们计算网格的中心点坐标，然后将其归一化到[0,1]区间：
+\begin{equation}
+x_{norm} = \frac{x - x_{min}}{x_{max} - x_{min} + \epsilon}
+\end{equation}
+
+对于POI特征，我们同样采用归一化方法，确保不同类型POI特征的数值在同一尺度上。
+
+\subsubsection{基于密度的序列排序}
+
+考虑到商业扩张通常遵循"从高密度区域向外扩展"的规律，我们设计了基于密度的序列排序算法。该算法通过计算每个网格到其K个最近邻网格的平均距离来衡量密度，距离越小表示密度越大：
+
+\begin{equation}
+density\_score_i = \frac{1}{K}\sum_{j=1}^{K} d(grid_i, neighbor_j)
+\end{equation}
+
+其中$d(grid_i, neighbor_j)$表示网格$i$到其第$j$个最近邻的欧氏距离。通过这种排序方式，我们能够构建符合商业扩张规律的序列，提高模型的学习效果。
+
+\subsection{对于标签的处理尝试}
+
+\subsubsection{标签语义引入}
+
+我们尝试引入 BERT 预训练模型，进行迁移学习。迁移学习的目标在于，再这个具体问题下面，就已有的数据集对模型进行微调，然后让 BERT 模型可以更加符合这个具体问题的特点。这种方案在理论上，会显著提升模型的表现，因为预训练模型已经具备了很强的理解文本的能力，相较于传统的包括 Word2vec、seq2seq 等模型，BERT 模型作为一种早期的大模型，训练成本高、参数量巨大，因而需要预训练。利用大模型本身具有一定的文本信息理解能力和泛化推理能力，代表了新的迁移学习范式，预训练-微调-评估\cite{devlin-etal-2019-bert}。
+
+为了显著提高含有 BERT 模型的训练速率，我们扩大了 batch size，并且引入了 AMP 机制\cite{micikevicius_mixed_2018}，还采用了 tokenizer 将文本数据先全部预处理向量化放入GPU后再训练，以专门针对使用 GPU 的训练进行优化，让训练能够更加亲和 GPU，实现更高的训练效率。同时，我们尝试调节超参，调节模型构造，以尽可能提升模型的表现，充分利用这些特征。
+
+但是很遗憾的是，由于数据量极度缺失，而 BERT 模型太大，即使微调也效果非但并没有明显提升，还影响到了这个模型的整体性能。模型复杂度显著提升，较小的数据集的训练并不能满足其需求，其他特征的梯度下降受到显著影响，梯度下降速率降低、模型训练时间显著增长、收敛更加不稳定、模型复杂度更高、泛化能力也并没有明显提升，因此我们最终直接放弃了这些和文本有关的特征。原始的版本并没有处理标签和名称进行处理。
+
+\subsubsection{统计标签}
+
+上文提到的方法，在此不赘述，我们仔细观察标签的分类，发现其都有多个层级的分类指标构成，并且第一个分类指标是我们认为最有价值的，同时具备类别大和区分度高的特点。比如说，“购物服务;服装鞋帽皮具店;品牌服装店”这个数据，我们可以提取“购物”作为其最重要的标签。我们将所有的标签进行统计，发现一共只存在10个标签，就将其作为品牌类型的分类标签。这样做的好处是，能够减少类别数量，保留最重要的信息的同时保证每一类的项目数目尽可能多，提高模型的训练效率，同时保留了足够的信息量。
+
+\subsection{数据增强和特征增强}
+
+一般认为，传统数据增强的方法包括：
+
+\begin{itemize}
+\item \textbf{噪声注入}：在网格坐标等特征上添加小幅度随机噪声，增加数据的多样性\cite{bishop_training_1995}。这种方法通过在输入特征中引入高斯噪声或其他形式的随机扰动，提高模型的泛化能力和鲁棒性。
+\item \textbf{序列扰动}：对历史网格序列进行随机打乱或局部交换，生成新的训练样本\cite{zhang_mixup_2018}。类似于Mixup等数据增强技术，通过改变序列的内部结构来增加训练数据的多样性。
+\item \textbf{数据平衡}：对于类别不平衡的品牌类型，可以通过过采样或欠采样方法调整各品牌的样本数量\cite{chawla_smote_2002}。SMOTE等方法通过生成合成样本来平衡不同类别的数据分布。
+\item \textbf{特征工程}：对POI特征进行聚类或降维处理，提取更具代表性的特征向量\cite{jolliffe_principal_2016}。主成分分析（PCA）和聚类方法可以减少特征维度并提取关键信息。
+\end{itemize}
+
+经过多次实验，我们发现了上述传统的方案都并没有导致效果变好，甚至导致了效果变差。因为，我们假设的店铺开张顺序是有一定的时序性的，因此我们在增加数据扰动的情况下反而破坏了这种时序性的特点，造成了负面的影响。而对历史坐标的些微扰动，并不会影响选址的区块位置，而直接改变选址区块位置的行为是简直无法接受的。而对于特征降维，我们已经面临特征不够用的情况，不至于再减少特征，相反我们使用人造特征的方式添加了一部分的特征，并且发现取得了较好的效果。因此，我们没有采用上述的传统数据增强方法。
+
+为了最大化利用有限的训练数据，我们采用滑动窗口方法从每个品牌的店铺序列中生成多个训练样本。例如，对于序列[A,B,C,D]，我们使用以下算法产生样本：
+
+\begin{algorithm}
+\caption{滑动窗口样本生成算法}
+\begin{algorithmic}[1]
+\State \textbf{输入:} 序列 $S = [A, B, C, D]$, 窗口大小 $w = 3$
+\State \textbf{输出:} 样本集 $Samples$
+\State $Samples \gets []$
+\For{$i = 0$ to $len(S) - w$}
+    \State $sample \gets S[i:i+w]$
+    \State $Samples.append(sample)$
+\EndFor
+\State \Return $Samples$
+\end{algorithmic}
+\end{algorithm}
+
+这种处理方法不仅增加了训练样本数量，还使模型能够学习不同长度序列的预测模式，更好地模拟品牌实际扩张过程中的决策链。这种方式能够和具体问题的时序性特点相结合，充分利用了已有的历史数据，并且实践证明具有非常良好的效果。
+
+\subsection{多模态特征融合设计}
+
+针对商业选址预测任务的特点，并且总结此前的并行化尝试的经验，我们设计了一个多模态融合的神经网络架构，该架构能够同时处理和融合三种不同类型的信息。
+
+\subsubsection{序列特征编码(SeqEncoder)}
+
+历史选址序列包含了品牌扩张的时序信息和空间模式。我们使用嵌入层将网格ID映射到低维向量空间，然后通过LSTM网络捕获序列中的时序依赖关系：
+
+\begin{equation}
+h_t = LSTM(embed(grid\_id_t), h_{t-1})
+\end{equation}
+
+LSTM的长短期记忆特性使其能够有效学习品牌在不同时期的选址偏好变化。
+
+这部分，我们也尝试过使用GRUNN或者Transformer或者其他时序模型，以及GNN的图神经网络模型，通过并行的方式，将最后的输出交由MLP，同时加入上文所述的 BERT 处理过的文本信息（包括了品牌名称、品牌类型）的特征，共同作为MLP的输入。可以认为，这里面存在迁移学习，而BERT处理过的信息可以用于将信息进行分类，实现一个不同分布规律的数据之间的聚类和对比学习。但是，最终效果并不如意。这个模型如图\ref{fig:multimodal_encoder}所示。
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[
+    node distance=1.2cm and 0.8cm,
+    auto,
+    >=latex',
+    input/.style={rectangle, draw, fill=blue!10, rounded corners, minimum height=0.8cm, font=\small},
+    model/.style={rectangle, draw, fill=green!20, minimum width=2cm, minimum height=0.8cm, font=\small},
+    op/.style={circle, draw, fill=orange!20, minimum size=0.8cm, font=\small},
+    output/.style={rectangle, draw, fill=red!10, rounded corners, minimum height=0.8cm, font=\small}
+]
+
+% Inputs
+\node[input] (grid_id) at (0,0) {grid\_id\_t};
+\node[input] (brand_info) at (6,0) {brand\_name, brand\_type};
+
+% Encoders for grid_id
+\node[model] (lstm) at (-1,1.5) {LSTM};
+\node[model] (gnn) at (1,1.5) {GNN};
+\node[model] (transformer) at (3,1.5) {Transformer};
+
+% Encoder for brand_info
+\node[model] (bert) at (6,1.5) {BERT};
+\node[model] (embed_bert) at (6,2.7) {Embedding};
+
+% Connections from inputs to encoders
+\draw[->] (grid_id) -- (lstm);
+\draw[->] (grid_id) -- (gnn);
+\draw[->] (grid_id) -- (transformer);
+\draw[->] (brand_info) -- (bert);
+\draw[->] (bert) -- (embed_bert);
+
+% Concatenation
+\node[op] (concat) at (3,4) {Concat};
+\draw[->] (lstm) -- (concat);
+\draw[->] (gnn) -- (concat);
+\draw[->] (transformer) -- (concat);
+\draw[->] (embed_bert) -- (concat);
+
+% MLP and Output
+\node[model] (mlp) at (3,5.2) {MLP};
+\node[output] (f_seq) at (3,6.4) {$f_{seq}$};
+
+\draw[->] (concat) -- (mlp);
+\draw[->] (mlp) -- (f_seq);
+
+\end{tikzpicture}
+\caption{多模态序列编码器结构示意图（失败的尝试）}
+\label{fig:multimodal_encoder}
+\end{figure}
+
+但是很显然，这个模型的复杂度非常高，难以在一个较小的数据集下进行训练。据集的规模并不大，模型的复杂度过高，欠拟合严重，模型难以提取到足够的特征而收敛。为了降低模型复杂度，我们最终选择了只保留简单的LSTM作为序列特征的编码器，而抛弃掉那些看起来很复杂、高级的模型。
+
+尽管如此，这种思路也接续到了后续，最终的模型依然是一个并行后拼接的架构。
+
+\subsubsection{空间特征编码(CoordEncoder)}
+地理坐标信息反映了选址的空间连续性。我们通过多层感知机(MLP)对归一化后的坐标特征进行编码，提取空间分布模式。
+
+\subsubsection{环境特征编码(POIEncoder)}
+POI特征反映了网格周边的商业环境和设施分布。同样使用MLP对POI特征向量进行编码，捕获环境因素对选址决策的影响。
+
+\subsubsection{特征融合策略(Fusion Layer)}
+为了充分利用不同模态特征的互补信息，我们设计了基于拼接和深度学习的特征融合算法。该算法采用先拼接后融合的策略，有效整合了序列、空间和环境三种异构特征。
+
+\paragraph{特征拼接算法}
+首先，三种编码器分别提取各自模态的特征表示：
+\begin{itemize}
+    \item 序列特征$ f_{seq} \in \mathbb{R}^{d_{seq}} $：通过LSTM捕获时序依赖关系
+    \item 空间特征$ f_{coord} \in \mathbb{R}^{d_{coord}} $：通过MLP编码地理位置信息  
+    \item 环境特征$ f_{poi} \in \mathbb{R}^{d_{poi}} $：通过MLP编码周边设施分布
+\end{itemize}
+
+核心拼接算法采用向量级联操作：
+\begin{equation}
+f_{concat} = concat(f_{seq}, f_{coord}, f_{poi}) \in \mathbb{R}^{d_{seq} + d_{coord} + d_{poi}}
+\end{equation}
+
+\begin{algorithm}[H]
+\caption{多模态特征拼接融合算法}
+\begin{algorithmic}[1]
+\State \textbf{输入:} 历史序列$S$，坐标特征$C$，POI特征$P$
+\State \textbf{输出:} 融合特征$f_{fused}$
+\State // 特征编码阶段
+\State $f_{seq} \gets SeqEncoder(S)$ \Comment{序列特征编码}
+\State $f_{coord} \gets CoordEncoder(C)$ \Comment{空间特征编码}
+\State $f_{poi} \gets POIEncoder(P)$ \Comment{环境特征编码}
+\State // 特征拼接阶段
+\State $f_{concat} \gets [f_{seq}; f_{coord}; f_{poi}]$ \Comment{向量拼接}
+\State // 深度融合阶段
+\State $f_{fused} \gets MLP_{fusion}(f_{concat})$ \Comment{非线性变换}
+\State \Return $f_{fused}$
+\end{algorithmic}
+\end{algorithm}
+
+深度融合层通过多层感知机学习特征间的复杂交互：
+\begin{equation}
+f_{fused} = \sigma(W_2 \cdot \sigma(W_1 \cdot f_{concat} + b_1) + b_2)
+\end{equation}
+
+最终通过线性分类器预测网格选择概率：
+\begin{equation}
+P(grid_i | history) = softmax(W_{cls} \cdot f_{fused} + b_{cls})_i
+\end{equation}
+
+\section{架构设计}
+\subsection{多层并行编码架构}
+考虑到商业选址决策的多因素特性，我们设计了一个多层并行编码、特征拼接融合的神经网络架构。该架构通过三个并行的编码器分别处理不同类型的输入特征，然后通过拼接和深度融合实现多模态信息的有效整合。
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[
+    node distance=1.5cm and 2cm,
+    auto,
+    >=latex',
+    input/.style={rectangle, draw, fill=blue!15, rounded corners, text width=2.5cm, text centered, minimum height=1cm, font=\small},
+    encoder/.style={rectangle, draw, fill=green!20, text width=2.5cm, text centered, minimum height=1.5cm, font=\small},
+    fusion/.style={rectangle, draw, fill=purple!20, text width=4cm, text centered, minimum height=1.2cm, font=\small},
+    output/.style={rectangle, draw, fill=red!15, rounded corners, text width=3.5cm, text centered, minimum height=1cm, font=\small},
+    arrow/.style={->, thick, shorten >=2pt, shorten <=2pt}
+]
+
+% 输入层
+\node[input] (seq_input) at (0,0) {历史网格序列\\{$[g_1, g_2, ..., g_t]$}};
+\node[input] (coord_input) at (5,0) {坐标特征\\{$(lon, lat)$}};
+\node[input] (poi_input) at (10,0) {POI特征\\{$(p_1, p_2, ..., p_{10})$}};
+
+% 编码器层（并行处理）
+\node[encoder] (seq_encoder) at (0,2.8) {序列编码器\\(SeqEncoder)\\Embedding + LSTM};
+\node[encoder] (coord_encoder) at (5,2.8) {空间编码器\\(CoordEncoder)\\MLP};
+\node[encoder] (poi_encoder) at (10,2.8) {环境编码器\\(POIEncoder)\\MLP};
+
+% 特征表示
+\node[fusion, fill=yellow!15, text width=2.5cm] (seq_feat) at (0,5.3) {$f_{seq}$};
+\node[fusion, fill=yellow!15, text width=2.5cm] (coord_feat) at (5,5.3) {$f_{coord}$};
+\node[fusion, fill=yellow!15, text width=2.5cm] (poi_feat) at (10,5.3) {$f_{poi}$};
+
+% 特征拼接与融合层
+\node[fusion, minimum height=2cm] (concat) at (5,7.3) {特征拼接\\{$concat(f_{seq}, f_{coord}, f_{poi})$}};
+\node[fusion] (fusion_mlp) at (5,9.3) {深度融合\\{$MLP_{fusion}$}};
+\node[fusion, fill=orange!15] (fused_feat) at (5,10.8) {$f_{fused}$};
+
+% 分类预测层
+\node[output] (classifier) at (5,12.3) {线性分类器\\{$W_{cls} \cdot f_{fused} + b_{cls}$}};
+\node[output] (probability) at (5,13.8) {概率分布\\{$P(grid_i | history)$}};
+
+% 连接线
+\draw[arrow] (seq_input) -- (seq_encoder);
+\draw[arrow] (coord_input) -- (coord_encoder);
+\draw[arrow] (poi_input) -- (poi_encoder);
+
+\draw[arrow] (seq_encoder) -- (seq_feat);
+\draw[arrow] (coord_encoder) -- (coord_feat);
+\draw[arrow] (poi_encoder) -- (poi_feat);
+
+\draw[arrow] (seq_feat) -- (concat);
+\draw[arrow] (coord_feat) -- (concat);
+\draw[arrow] (poi_feat) -- (concat);
+
+\draw[arrow] (concat) -- (fusion_mlp);
+\draw[arrow] (fusion_mlp) -- (fused_feat);
+\draw[arrow] (fused_feat) -- (classifier);
+\draw[arrow] (classifier) -- (probability);
+
+% 维度标注
+\node[font=\tiny, below=0.2cm] at (seq_feat) {$\in \mathbb{R}^{d_{seq}}$};
+\node[font=\tiny, below=0.2cm] at (coord_feat) {$\in \mathbb{R}^{d_{coord}}$};
+\node[font=\tiny, below=0.2cm] at (poi_feat) {$\in \mathbb{R}^{d_{poi}}$};
+\node[font=\tiny, below=0.4cm] at (concat) {$\in \mathbb{R}^{d_{seq}+d_{coord}+d_{poi}}$};
+\node[font=\tiny, below=0.1cm] at (fused_feat) {$\in \mathbb{R}^{d_{hidden}}$};
+
+\end{tikzpicture}
+\caption{多模态特征融合模型整体架构图}
+\label{fig:multimodal_architecture}
+\end{figure}
+
+该架构的核心设计思想包括：
+
+\begin{itemize}
+\item \textbf{并行编码}：三个编码器独立并行处理不同模态的特征，充分提取各自的表征能力
+\item \textbf{特征拼接}：通过向量级联操作将异构特征统一到同一表示空间
+\item \textbf{深度融合}：多层感知机学习特征间的非线性交互关系
+\item \textbf{端到端学习}：整个网络通过反向传播算法进行端到端优化
+\end{itemize}
+
+这种设计既保持了各模态特征的独立性，又通过融合层实现了跨模态信息的有效整合，为商业选址预测提供了强大的特征表达能力。模型能够自动发现序列模式、空间分布和环境因素之间的内在关联，从而实现精准的选址预测。
+\subsection{训练方法}
+在模型训练过程中，我们采用了Adam优化器\cite{kingma_adam_2015}作为基础版本的优化算法。Adam结合了AdaGrad和RMSProp算法的优点，通过计算梯度的一阶矩估计和二阶矩估计来自适应调整每个参数的学习率。其核心更新公式为：
+
+\begin{equation}
+m_t = \beta_1 m_{t-1} + (1-\beta_1) g_t
+\end{equation}
+
+\begin{equation}
+v_t = \beta_2 v_{t-1} + (1-\beta_2) g_t^2
+\end{equation}
+
+\begin{equation}
+\theta_{t+1} = \theta_t - \frac{\alpha}{\sqrt{\hat{v}_t} + \epsilon} \hat{m}_t
+\end{equation}
+
+其中$\hat{m}_t = \frac{m_t}{1-\beta_1^t}$和$\hat{v}_t = \frac{v_t}{1-\beta_2^t}$分别是偏差修正的一阶和二阶矩估计。
+
+在优化版本中，我们进一步尝试采用了AdamW优化器\cite{loshchilov_decoupled_2019}，该优化器将权重衰减与梯度更新解耦，提供了更好的泛化性能。同时配置了学习率调度器（ReduceLROnPlateau），当验证集性能停止改善时自动降低学习率，有助于模型在训练后期进行更精细的参数调整。
+
+此外，我们还实现了早停机制（Early Stopping），通过监控验证集上的平均倒数排名（MRR）指标来防止过拟合，当连续若干轮训练未能改善验证性能时自动停止训练。
+
+\section{实验评估}
+
+为了验证我们提出的多模态融合神经网络模型在商业选址预测任务中的有效性，我们在项目提供的数据集上进行了全面的实验评估。实验采用了多个评价指标，包括平均倒数排名（MRR）和不同K值（1、5、10）的准确率指标（Acc@K），以全面衡量模型的预测性能。
+
+\subsection{实验设置}
+
+实验使用了项目提供的训练集和测试集数据，其中训练集用于模型参数学习，测试集用于最终性能评估。我们采用滑动窗口方法从历史网格序列中生成训练样本，并对坐标和POI特征进行归一化处理。模型训练过程中使用Adam优化器，学习率设置为1e-3，批次大小为32，最大训练轮数为40，早停耐心值为5。完整的超参数设置如表\ref{tab:hyperparameters}所示：
+
+\begin{table}[H]
+\centering
+\begin{tabular}{|c|c|c|}
+\hline
+\rowcolor[HTML]{D9EAD3}
+\textbf{超参数} & \textbf{数值} & \textbf{说明} \\ \hline
+学习率 (lr) & 1e-3 & Adam优化器的学习率 \\ \hline
+批次大小 (batch\_size) & 32 & 每个训练批次的样本数量 \\ \hline
+最大训练轮数 (num\_epochs) & 40 & 模型训练的最大迭代次数 \\ \hline
+早停耐心值 (patience) & 5 & 验证指标无改善时的等待轮数 \\ \hline
+优化器 & Adam & 自适应学习率优化算法 \\ \hline
+损失函数 & CrossEntropyLoss & 多分类交叉熵损失 \\ \hline
+\end{tabular}
+\caption{模型训练超参数设置}
+\label{tab:hyperparameters}
+\end{table}
+
+\subsection{性能指标}
+
+我们的多模态融合模型在测试集上的最终实验结果如表\ref{tab:final_results}所示：
+
+\begin{table}[H]
+\centering
+\begin{tabular}{|c|c|}
+\hline
+\rowcolor[HTML]{D9EAD3}
+\textbf{评价指标} & \textbf{性能值} \\ \hline
+Test\_MRR & 0.3257 \\ \hline
+Test\_Acc@1 & 0.270 \\ \hline
+Test\_Acc@5 & 0.395 \\ \hline
+Test\_Acc@10 & 0.474 \\ \hline
+\end{tabular}
+\caption{多模态融合模型最终实验结果}
+\label{tab:final_results}
+\end{table}
+
+\section{结果}
+
+将我们的实验结果与表\ref{tab:baseline_results}中的基线方法进行对比，可以看出我们的多模态融合模型在所有评价指标上都取得了显著的性能提升：
+
+\begin{itemize}
+\item \textbf{Test\_Acc@1}: 从基线最好的0.0604提升到0.270，提升幅度达347\%
+\item \textbf{Test\_Acc@5}: 从基线最好的0.2625提升到0.395，提升幅度达50.5\%
+\item \textbf{Test\_Acc@10}: 从基线最好的0.3702提升到0.474，提升幅度达28.1\%
+\item \textbf{Test\_MRR}: 从基线最好的0.1326提升到0.3257，提升幅度达145.6\%
+\end{itemize}
+
+这些显著的性能提升验证了我们提出的多模态融合架构的有效性。特别是在\textbf{Acc@1}指标上的大幅提升，表明模型能够更准确地预测品牌的首选选址位置，这对实际的商业决策具有重要意义。
+
+\section{讨论}
+
+多模态融合神经网络的使用让我们的效果提升显著，经过分析，以下是我们认为起到关键作用的几个因素
+
+\subsection{多模态特征融合的有效性分析}
+
+\subsubsection{针对含特征序列的时序建模能力}
+
+历史序列选址用LSTM进行编码，能够捕捉到品牌扩张的时许依赖关系。同时注意到LSTM也有着以下的特点：
+
+\begin{enumerate}
+\item \textbf{长期记忆保持}：这解决的是梯度消失的问题，让时序性的特征能够被更好的捕捉
+\item \textbf{选择性信息更新}：主要是用来保留有用信息以及过滤噪声
+\item \textbf{时序模式识别}：抓中品牌扩张的思路，先中心后扩散
+\end{enumerate}
+
+实验中注意到，LSTM编码可以更好的捕捉到品牌选址习惯，这是简单的平均池化或最后一个时间步输出所不具备的
+
+\subsubsection{空间特征的连续性建模}
+
+地理坐标特征的提取，根据我们的经验分析创建伪标签排序，通过MLP编码后能够有效建模空间的连续性：
+
+\begin{enumerate}
+\item \textbf{空间邻近性}：相近的地理位置在编码空间中距离也相近，符合商业选址中的"扎堆效应"
+\item \textbf{区域特性学习}：模型能够学习不同地理区域价值差异
+\item \textbf{空间约束建模}：通过归一化处理，模型能够理解地理边界和空间限制
+\end{enumerate}
+
+消融实验显示，去除空间特征会导致模型性能下降约30\%，说明空间连续性信息对选址预测具有重要贡献。
+
+\subsubsection{环境特征的语义增强}
+
+POI（兴趣点）特征为模型提供了丰富的环境语义信息：
+
+\begin{enumerate}
+\item \textbf{商业环境理解}：通过统计不同类型POI的密度，展现区域的商业繁荣程度，让模型捕捉更多信息
+\item \textbf{功能区域识别}：医疗、教育、购物等POI的组合模式的密度可以体现出这个区间的特点
+\item \textbf{客流潜力评估}：POI密度也有着对人口密度的反应
+\end{enumerate}
+
+注意到包含POI时模型表现会更加出彩，证明了环境语义的特点
+
+\subsection{特征工程策略的贡献分析}
+
+\subsubsection{基于密度的序列排序优化}
+
+针对数据集中无需的选址顺序，我们采取的策略是利用某个机器学习方法来模拟商业扩张，以下是他的合理性的解释：
+
+\begin{enumerate}
+\item \textbf{符合商业逻辑}：品牌扩张通常遵循"从核心到边缘"的模式，密度排序能够重现这一过程
+\item \textbf{减少噪声影响}：时间序列中如果存在异常选址，密度排序能够减少这类噪声的影响
+\end{enumerate}
+
+\subsubsection{POI特征工程的深度挖掘}
+
+针对原始的无特征的grid数据，我们加入的丰富的POI统计特征，以下是有关操作：
+
+\begin{enumerate}
+\item \textbf{多维度特征构建}：增加区域的特征，让模型捕捉更多信息
+\item \textbf{领域知识融入}：提高了信息的语义性
+\item \textbf{特征归一化处理}：消除不同POI类型的尺度差异
+\end{enumerate}
+
+\subsection{数据增强策略的有效性验证}
+
+\subsubsection{滑动窗口方法的优势}
+
+我们尝试了多种传统数据增强方法，但效果不佳。对此分析，我们认为利用随机打乱序列的方式会破坏选址的时序逻辑，导致模型无法学习到正确的扩张模式。而添加噪声的方式要么并没有显著影响选址区块位置特征，要么会改变地理语义，导致错误的空间关联。
+
+考虑到商业选址具有很强的领域特性，通用的数据增强方法难以适用。相比传统的数据增强方法（如噪声注入、序列扰动），我们采用的滑动窗口方法，具有独特优势：
+
+\begin{enumerate}
+\item \textbf{保持数据真实性}：不改变原始数据的语义，避免引入虚假模式
+\item \textbf{充分利用序列信息}：从长序列中提取多个子序列，最大化数据利用率
+\item \textbf{模拟实际预测场景}：每个子序列都对应一个真实的预测任务，提高了训练与应用的一致性
+\end{enumerate}
+
+通过滑动窗口方法，我们将原始训练样本进行显著扩充，缓解了数据稀缺问题。
+
+\subsection{模型架构设计的创新点}
+
+\subsubsection{并行编码器的设计理念}
+
+采用了并行编码器架构而非串行处理，这一操作的优势可以体现在：
+
+\begin{enumerate}
+\item \textbf{特征独立性}：各编码器独立优化，避免了不同模态特征之间的相互干扰
+\item \textbf{计算效率}：最常见的：并行计算提高了训练和推理效率
+\item \textbf{模块化设计}：多个模块按照功能进行区分，有效的提高了可编码性
+\end{enumerate}
+
+\subsubsection{深度融合层的作用机制}
+
+学习跨模态的特征交互：
+
+\begin{enumerate}
+\item \textbf{维度调节}：将不同维度特征映射到同一空间
+\item \textbf{信息整合}：将序列、空间、环境等特征整合
+\end{enumerate}
+
+\subsubsection{与基线方法的比较优势}
+
+相比各种基线方法，我们的模型优势明显：
+
+\begin{enumerate}
+\item \textbf{vs 随机猜测}：体现了机器学习方法的有效性
+\item \textbf{vs Word2vec}：深度模型在复杂模式识别方面的优势，尤其是LSTM对于时序数据的处理能力
+\item \textbf{vs LSTM+MLP}：多模态融合相比单一序列建模的优越性，能够同时捕捉时序、空间和环境信息
+\item \textbf{vs Transformer+MLP和对比学习}：针对特定任务的架构设计胜过通用架构，以及简单模型在小数据集上收敛快、拟合程度高的优势
+\end{enumerate}
+
+\subsection{模型局限性}
+
+我们认为目前该模型还存在的一些局限：
+
+\begin{enumerate}
+\item \textbf{静态建模}：未考虑时间变化对商业环境的影响
+\item \textbf{品牌特异性}：不同类型品牌的选址模式差异可能需要专门建模，我们目前仍然将其视为有很大共性、可以相互对比学习的对象
+\item \textbf{宏观因素缺失}：未考虑经济、政策等宏观因素对选址的影响，特征仍然存在一些局限性
+\end{enumerate}
+
+\subsection{实际应用价值与社会意义}
+
+\subsubsection{商业决策支持}
+
+认为该模型在实际应用中存在可执行的能力：
+
+\begin{enumerate}
+\item \textbf{降低决策风险}：以数据驱动来进行选址预测，减少主观判断所带来的偏差
+\item \textbf{提升决策效率}：通过快速准确的选址建议，帮助企业节省选址时间和成本
+\item \textbf{优化资源配置}：通过精准预测，帮助企业在合理区域内进行资源配置，最大化商业价值
+\end{enumerate}
+
+\subsubsection{技术创新贡献}
+
+从技术角度来看，本实验有着：
+
+\begin{enumerate}
+\item \textbf{多模态融合范式}：为地理空间预测任务提供了新的建模思路
+\item \textbf{特征工程创新}：提出了适合商业选址任务的特征工程方法
+\item \textbf{深度学习应用}：展示了深度学习在商业智能领域的广泛应用潜力，验证了深度模型相较于传统方法的优势
+\item \textbf{领域知识整合}：将商业地理学的专业知识系统性地融入深度学习模型设计中，通过有关经验增加了特征信息量，提高准确性
+\end{enumerate}
+
+我们提出的多模态融合神经网络在技术上有了更新，也为实际的应用提供了一个科学的方案，有着理论与实际相结合的现实价值意义。
+
+\section{总结}
+
+\subsection{研究成果总结}
+
+本文针对商业智能选址预测这一重要的实际应用问题，提出了一种基于多模态融合的深度学习解决方案。通过系统的理论分析、模型设计、实验验证和结果分析，我们取得了以下主要研究成果：
+
+\subsubsection{理论贡献}
+
+\begin{enumerate}
+\item \textbf{多模态融合框架}：首次将序列特征、空间特征和环境特征系统性地融合到商业选址预测模型中，建立了完整的多模态建模理论框架。
+\item \textbf{时空序列建模}：将商业扩张过程建模为时空序列预测问题，揭示了品牌选址决策中的时序依赖关系和空间连续性规律。
+\item \textbf{领域知识整合}：将商业地理学的专业知识系统性地融入深度学习模型设计中，示范了领域驱动的AI方法论。
+\end{enumerate}
+
+\subsubsection{技术创新}
+
+\begin{enumerate}
+\item \textbf{并行编码器架构}：设计了序列编码器、空间编码器和环境编码器的并行架构，实现了不同模态特征的独立优化和有效融合。
+\item \textbf{特征工程方法}：提出了基于密度的序列排序算法和POI特征增强策略，显著提升了输入数据的信息密度。
+\item \textbf{数据增强策略}：开发了适合商业选址任务的滑动窗口数据增强方法，在保持数据真实性的前提下有效扩充了训练样本。
+\item \textbf{优化训练策略}：采用Adam/AdamW优化器、混合精度训练、学习率调度和早停机制，实现了高效稳定的模型训练。
+\end{enumerate}
+
+\subsubsection{实验验证}
+
+通过在真实商业数据集上的全面实验验证，我们的模型相比最佳基线方法取得了显著的性能提升：
+
+\begin{itemize}
+\item \textbf{Acc@1}: 从0.0604提升到0.270，提升幅度达347\%
+\item \textbf{Acc@5}: 从0.2625提升到0.395，提升幅度达50.5\%
+\item \textbf{Acc@10}: 从0.3702提升到0.474，提升幅度达28.1\%
+\item \textbf{MRR}: 从0.1326提升到0.3257，提升幅度达145.6\%
+\end{itemize}
+
+这些结果充分验证了我们提出方法的有效性和优越性。
+
+\subsection{研究局限性}
+
+尽管本研究取得了显著成果，但我们也认识到当前工作存在以下局限性：
+
+\subsubsection{数据相关局限性}
+
+\begin{enumerate}
+\item \textbf{伪序列问题}：由于缺乏真实的时间标签，我们采用基于密度的方法构建选址序列。这种人工构建的序列虽然符合商业逻辑，但可能与真实的选址时序存在偏差，导致模型学习到的时序模式与实际情况不完全一致，存在过拟合到人工构建模式的风险。
+
+\item \textbf{数据稀缺性}：商业选址数据本身具有稀缺性特点，尤其是长序列的品牌扩张数据较少，可能导致模型在处理复杂扩张模式时泛化能力不足。
+
+\item \textbf{POI特征局限}：当前的POI特征主要基于静态的地理信息统计，未能充分反映商业环境的动态变化和实时特性，可能影响模型对商业环境变化的敏感性。
+\end{enumerate}
+
+\subsubsection{模型设计局限性}
+
+\begin{enumerate}
+\item \textbf{静态建模假设}：模型假设选址偏好在时间上相对稳定，未考虑品牌策略调整、市场环境变化等因素对选址模式的影响，可能在面对策略转型期的品牌时预测准确率下降。
+
+\item \textbf{品牌通用性}：当前模型采用统一的架构处理所有品牌，未充分考虑不同行业、不同规模品牌在选址模式上的显著差异，可能影响模型对特定品牌类型的预测精度。
+
+\item \textbf{空间尺度固定}：模型基于固定的网格划分进行预测，未考虑不同商业业态对空间尺度的不同需求，可能限制模型在多尺度选址预测中的应用。
+\end{enumerate}
+
+\subsubsection{评估方法局限性}
+
+\begin{enumerate}
+\item \textbf{评价指标单一性}：当前主要采用排序类指标（Acc@K、MRR），未能充分评估模型预测结果的商业合理性和实际可操作性。
+
+\item \textbf{缺乏长期验证}：受限于数据可获得性，未能进行真实商业环境下的长期跟踪验证，模型的实际应用效果仍需进一步验证。
+
+\item \textbf{成本效益评估缺失}：未建立模型预测准确性与实际商业收益之间的量化关系，难以评估模型的真实商业价值。
+\end{enumerate}
+
+\subsection{未来改进方向}
+
+我们认为可以进行改进的地方：
+
+\begin{enumerate}
+\item \textbf{动态建模}：引进时间作为新的因子，让建模商业环境能够动态变化
+\item \textbf{层次化架构}：品牌类型增加、子网络设计
+\item \textbf{外部信息融合}：增加更多宏观的外部因素以及指标。比如经济指标，人口统计、政策信息等
+\item \textbf{图神经网络}：尝试增加空间上的邻接关系。
+\item \textbf{注意力机制}：让模型自动学习不同特征的重要性权重
+\item \textbf{迁移学习}：将其他领域的选址模型迁移到商业选址任务中
+\item \textbf{自监督学习}：利用无标签数据进行预训练，提高模型的泛化能力
+\end{enumerate}
+
+\subsection{结语}
+
+商业智能选址预测作为一个重要的实际应用问题，具有巨大的商业价值和社会意义。本研究通过多模态深度学习方法，为这一问题提供了创新性的解决方案，并取得了显著的性能提升。尽管仍存在一些局限性，但我们的工作为后续研究奠定了坚实的基础，也为深度学习在商业地理分析中的应用提供了有价值的探索和实践经验。
+
+我们相信，随着数据获取能力的提升、算法技术的发展和计算资源的增强，基于人工智能的商业选址预测方法将在未来发挥越来越重要的作用，为企业的科学决策和可持续发展提供强有力的技术支撑。
+
+
+
+\addcontentsline{toc}{section}{\refname}
+\bibliographystyle{IEEEtran}
+\bibliography{sample}
+\newpage
+\appendix
+\section*{\appendixname}
+\addcontentsline{toc}{section}{\appendixname}
+\section{项目代码实现}
+
+\textbf{GitHub仓库地址：} \url{https://github.com/szw0407/DL-project-2025}
+
+\subsection{核心模型代码}
+
+此部分的代码中注释有一部分是由AI生成的，旨在更清晰地展示思路，体现模型的结构和各个组件的功能。
+
+主体代码实现分为多个模块，主要包括神经网络模型实现、主程序入口、训练逻辑实现、数据预处理模块、数据特征增强和模型评估模块等。
+
+\subsubsection{神经网络模型实现 (model.py)}
+\lstinputlisting[language=Python, caption={多模态神经网络模型实现}, label={lst:model}]{../src/model.py}
+
+\subsubsection{主程序入口 (main.py)}
+\lstinputlisting[language=Python, caption={主程序实现}, label={lst:main}]{../src/main.py}
+
+\subsubsection{训练逻辑实现 (train.py)}
+\lstinputlisting[language=Python, caption={模型训练实现}, label={lst:train}]{../src/train.py}
+
+\subsubsection{数据预处理模块 (data\_preprocessing.py)}
+\lstinputlisting[language=Python, caption={数据预处理实现}, label={lst:preprocessing}]{../src/data_preprocessing.py}
+
+\subsubsection{数据特征增强 (测试数据文件.py)}
+\lstinputlisting[language=Python, caption={数据特征增强实现}, label={lst:test_data}]{../src/测试数据文件.py}
+
+\subsubsection{模型评估模块 (evaluate.py)}
+\lstinputlisting[language=Python, caption={模型评估实现}, label={lst:evaluate}]{../src/evaluate.py}
+
+\subsection{数据样本展示}
+\subsubsection{训练数据格式}
+以下直接展示训练数据文件的前10行内容：
+\inputdatafile{../data/train_data.csv}{训练数据样本 (train\_data.csv)}{lst:train_data}
+
+\subsubsection{网格坐标映射}
+以下直接展示网格坐标映射文件的前10行内容：
+\inputdatafile{../data/grid_coordinates-2.csv}{网格坐标映射数据 (grid\_coordinates-2.csv)}{lst:grid_data}
+
+\subsubsection{测试数据格式}
+以下直接展示测试数据文件的前10行内容：
+\inputdatafile{../data/test_data.csv}{测试数据样本 (test\_data.csv)}{lst:test_data}
+
+\subsection{完整源代码文件结构}
+
+项目包含以下主要文件：
+
+\begin{itemize}
+    \item \texttt{src/model.py} - 神经网络模型定义
+    \item \texttt{src/main.py} - 主程序入口
+    \item \texttt{src/train.py} - 训练逻辑实现
+    \item \texttt{src/evaluate.py} - 模型评估
+    \item \texttt{src/data\_preprocessing.py} - 数据预处理
+    \item \texttt{data/train\_data.csv} - 训练数据
+    \item \texttt{data/test\_data.csv} - 测试数据
+    \item \texttt{data/grid\_coordinates-2.csv} - 网格坐标映射
+\end{itemize}
+
+详细的代码实现请参考GitHub仓库：\url{https://github.com/szw0407/DL-project-2025}
+
+\end{document}
