@@ -28,7 +28,6 @@ DL/
 │   ├── evaluate.py                # 模型评估模块
 │   └── 测试数据文件.py             # 数据预处理脚本
 ├── store_predictor_best.pth       # 最佳模型权重
-├── store_predictor_best_training_plot.svg # 训练过程可视化
 └── README.md                      # 项目说明文档
 ```
 
@@ -172,5 +171,7 @@ Test_Acc@10: 0.474
 ```
 
 ---
+
+其他有关讯息请查看对应的文档，在`report paper/`中。
 
 *最后更新：2025年7月6日*
